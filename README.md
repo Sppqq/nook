@@ -21,6 +21,21 @@ Nook is a self-hosted Telegram assistant that helps you look after a Linux serve
 
 Nook is an autonomous administrative tool. It runs commands with the Linux user's permissions. Agent instructions are not a sandbox, and its monitoring does not replace backups. Read [SECURITY.md](SECURITY.md) before granting it access.
 
+## Why choose Nook over OpenClaw or Hermes Agent?
+
+**Choose Nook when your main job is looking after Linux servers from Telegram.** Its advantage is the combination of server maintenance tools and a customizable Telegram interface in one project.
+
+- **Server care is built in.** Service and resource monitoring, a project inventory, SSH nodes, scheduled maintenance, and checks after a repair share the same workflow. Guard compares system snapshots for changes; `watchfix` can alert the agent when a registered health check fails so it can investigate or restore a backup. Configure your inventory, nodes, and checks for your own servers.
+- **Everyday controls stay in Telegram.** Pick a model, inspect available quotas, stop a task, continue a Mercury conversation, or approve a privileged command with buttons. Change which buttons appear, their layout, colors, and premium emoji directly in settings.
+- **Use the provider tools you already have.** Nook runs Codex CLI and Antigravity CLI and offers Mercury as a Codex quota fallback. Bring your own accounts and keys; provider quotas and charges still apply.
+- **Adapt the bot with Python.** Add buttons, handlers, and background tasks through local mods. Keep operational notes in editable Markdown files.
+
+[OpenClaw](https://github.com/openclaw/openclaw#readme) is worth choosing when you want a broad personal assistant across messaging platforms and companion apps. It offers a Gateway, a web control UI, and extensible tools, skills, and plugins.
+
+[Hermes Agent](https://github.com/NousResearch/hermes-agent#readme) is worth choosing when you want a general agent with a terminal UI, a learning loop, skill creation, searchable conversation history, multiple execution backends, and messaging integrations.
+
+Both projects also support Telegram and extensibility; those features alone are not unique to Nook. This comparison describes fit, based on their official READMEs reviewed on November 6, 2026. Nook has no comparative benchmarks establishing better speed, cost, reliability, or security. It is an early preview, with a Russian interface and a fresh-VPS installation still to validate.
+
 ## Install
 
 Use an interactive SSH terminal on Ubuntu 22.04/24.04 or an apt-based Debian system, with Python 3.10+, systemd, and a regular user who can use sudo. Other distributions and containers without user systemd need manual setup. Allow approximately 2 GB RAM for charts and optional voice recognition; actual usage depends on your workload.
