@@ -1,0 +1,93 @@
+#!/usr/bin/env python3
+"""Отложенные задачи Nook.
+  later 30m "проверь, что vault поднялся"     (s/m/h/d)
+  later 14:30 "напомни хозяину про бэкап"     (ближайшее такое время, по Москве)
+  later --every 6h "посмотри рост диска"
+  later --every 1d --at 09:00 "утренняя сводка хозяину"   (первый раз в ближайшие 09:00 МСК, дальше раз в сутки)
+  later --list | later --cancel ID
+"""
+import datetime as dt, fcntl, json, os, re, sys, time, uuid
+from zoneinfo import ZoneInfo
+
+MOSCOW = ZoneInfo('Europe/Moscow')
+
+HOME = os.environ.get("NOOK_HOME", os.path.expanduser("~/nook"))
+JOBS = os.path.join(HOME, "spool", "jobs.json")
+UNITS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+
+
+def parse_dur(s):
+    m = re.fullmatch(r"(\d+)([smhd])", s)
+    return int(m.group(1)) * UNITS[m.group(2)] if m else None
+
+
+def parse_when(s):
+    d = parse_dur(s)
+    if d:
+        return time.time() + d
+    m = re.fullmatch(r"(\d{1,2}):(\d{2})", s)
+    if m:
+        now = dt.datetime.now(MOSCOW)
+        t = now.replace(hour=int(m.group(1)), minute=int(m.group(2)), second=0, microsecond=0)
+        if t <= now:
+            t += dt.timedelta(days=1)
+        return t.timestamp()
+    try:
+        parsed = dt.datetime.fromisoformat(s)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=MOSCOW)
+        return parsed.timestamp()
+    except ValueError:
+        sys.exit(f"не понял время: {s} (примеры: 30m, 2h, 1d, 14:30, 2026-10-24T09:00)")
+
+
+def locked(fn):
+    os.makedirs(os.path.dirname(JOBS), exist_ok=True)
+    with open(JOBS + ".lock", "w") as lk:
+        fcntl.flock(lk, fcntl.LOCK_EX)
+        try:
+            jobs = json.load(open(JOBS))
+        except (FileNotFoundError, json.JSONDecodeError):
+            jobs = []
+        jobs, out = fn(jobs)
+        tmp = JOBS + ".tmp"
+        json.dump(jobs, open(tmp, "w"), ensure_ascii=False, indent=1)
+        os.replace(tmp, JOBS)
+        return out
+
+
+args = sys.argv[1:]
+if not args or args[0] in ("-h", "--help"):
+    print(__doc__); sys.exit(0)
+if args[0] == "--list":
+    def f(jobs):
+        for j in jobs:
+            when = dt.datetime.fromtimestamp(j["at"], MOSCOW).strftime("%Y-%m-%d %H:%M")
+            ev = f" каждые {j['every']}с" if j.get("every") else ""
+            print(f"{j['id']}  {when}{ev}  {j['prompt'][:100]}")
+        return jobs, None
+    locked(f); sys.exit(0)
+if args[0] == "--cancel":
+    jid = args[1]
+    n = locked(lambda jobs: ([j for j in jobs if j["id"] != jid], any(j["id"] == jid for j in jobs)))
+    print("отменено" if n else "нет такой"); sys.exit(0)
+
+every = None
+if args[0] == "--every":
+    every = parse_dur(args[1]) or sys.exit("--every: 30m/6h/1d")
+    if every < 600:
+        sys.exit("слишком часто: минимум 10m")
+    at = time.time() + every
+    args = args[2:]
+    if args[:1] == ["--at"]:
+        at = parse_when(args[1])
+        args = args[2:]
+else:
+    at = parse_when(args[0])
+    args = args[1:]
+prompt = " ".join(args).strip()
+if not prompt:
+    sys.exit("нужен текст задачи")
+job = {"id": uuid.uuid4().hex[:6], "at": at, "every": every, "prompt": prompt, "created": time.time()}
+locked(lambda jobs: (jobs + [job], None))
+print(f"ок, задача {job['id']} на {dt.datetime.fromtimestamp(at, MOSCOW):%Y-%m-%d %H:%M} МСК")

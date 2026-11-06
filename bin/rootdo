@@ -1,0 +1,54 @@
+#!/usr/bin/env python3
+"""rootdo "зачем" 'команда' [--timeout СЕК] — выполнить команду от root.
+
+- Включён полный доступ (хозяин включил в меню) → выполняется сразу, вывод и код возврата — здесь.
+- Иначе → хозяину уходит запрос с кнопками «Выполнить / Отказать». Закончи ход коротким «жду подтверждения»:
+  результат (вывод и код) придёт тебе следующим сообщением в этот же разговор.
+Сначала попробуй обычный `sudo -n` (разрешённые systemctl/journalctl/ss/dmesg/apt) — rootdo только для остального.
+Одна команда = одно действие; объясни «зачем» понятно для хозяина. Всё пишется в /var/log/nook-root.log.
+"""
+import json, os, subprocess, sys, time, uuid
+
+HOME = os.environ.get("NOOK_HOME", os.path.expanduser("~/nook"))
+BASE = os.path.join(HOME, "spool", "root")
+OUTBOX = os.path.join(HOME, "spool", "outbox")
+HELPER = "/usr/local/sbin/nook-root"
+
+args = sys.argv[1:]
+timeout = 600
+if "--timeout" in args:
+    i = args.index("--timeout")
+    timeout = int(args[i + 1])
+    del args[i:i + 2]
+if len(args) != 2 or args[0] in ("-h", "--help"):
+    print(__doc__); sys.exit(0 if args[:1] in (["-h"], ["--help"]) else 1)
+reason, cmd = args
+if not os.path.exists(HELPER):
+    sys.exit("nook-root не установлен — скажи хозяину выполнить: sudo bash ~/nook/setup/install-root.sh")
+
+os.makedirs(BASE, mode=0o700, exist_ok=True)
+rid = uuid.uuid4().hex[:16]
+path = os.path.join(BASE, rid + ".json")
+with open(path + ".tmp", "w") as f:
+    json.dump({"id": rid, "reason": reason, "cmd": cmd, "timeout": timeout, "created": time.time(),
+               "run": os.environ.get("NOOK_RUN")}, f, ensure_ascii=False)
+os.rename(path + ".tmp", path)
+
+try:
+    full = json.load(open(os.path.join(BASE, "full.json"))).get("until", 0) > time.time()
+except (OSError, ValueError):
+    full = False
+
+if full:
+    p = subprocess.run(["sudo", "-n", HELPER, rid], capture_output=True, text=True)
+    sys.stdout.write(p.stdout)
+    sys.stderr.write(p.stderr)
+    print(f"\n[exit {p.returncode}, полный доступ]")
+    sys.exit(p.returncode)
+
+os.makedirs(OUTBOX, exist_ok=True)
+name = f"{time.time():.6f}-{uuid.uuid4().hex[:6]}"
+with open(os.path.join(OUTBOX, name + ".tmp"), "w") as f:
+    json.dump({"root": rid, "run": os.environ.get("NOOK_RUN")}, f)
+os.rename(os.path.join(OUTBOX, name + ".tmp"), os.path.join(OUTBOX, name + ".json"))
+print("запрос отправлен хозяину на подтверждение; закончи ход — результат придёт следующим сообщением")

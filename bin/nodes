@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# nodes                      — список нод: имя (для команд), название от хозяина, адрес, ОС
+# nodes ИМЯ|НАЗВАНИЕ 'команда' — выполнить команду на ноде по SSH (ключ Nook)
+# nodes ИМЯ|НАЗВАНИЕ           — проверить связь
+# Название можно писать как хозяин («германия», «прод») — без учёта регистра, достаточно части.
+# Для scp/rsync нужно ИМЯ: scp -F ~/nook/ssh_config файл ИМЯ:/путь · rsync -e "ssh -F ~/nook/ssh_config" …
+H="${NOOK_HOME:-$HOME/nook}"
+if [ $# -eq 0 ]; then
+  python3 -c "
+import json
+for n in json.load(open('$H/nodes.json')):
+    f=n.get('facts',{}); t=f\"«{n['title']}»  \" if n.get('title') else ''
+    print(f\"{n['name']:24} {t}{n['user']}@{n['host']}:{n['port']}  {f.get('os','')} · root: {f.get('root','?')}\")
+" 2>/dev/null || echo "нод нет — хозяин добавляет их в меню бота: Ноды → Добавить"
+  exit 0
+fi
+name=$(python3 - "$1" "$H/nodes.json" <<'EOF'
+import json, sys
+q, items = sys.argv[1].lower(), json.load(open(sys.argv[2]))
+exact = [n for n in items if n["name"].lower() == q or (n.get("title") or "").lower() == q]
+part = [n for n in items if q in n["name"].lower() or q in (n.get("title") or "").lower()]
+hit = exact or part
+if len(hit) != 1:
+    sys.exit("нет такой ноды" if not hit else "неоднозначно: " + ", ".join(n["name"] for n in hit))
+print(hit[0]["name"])
+EOF
+) || exit 2
+shift
+if [ $# -eq 0 ]; then
+  ssh -F "$H/ssh_config" -o BatchMode=yes -o ConnectTimeout=10 "$name" 'echo "ok: $(hostname), $(uptime -p)"'
+  exit $?
+fi
+exec ssh -F "$H/ssh_config" -o BatchMode=yes -o ConnectTimeout=15 "$name" "$@"

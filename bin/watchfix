@@ -1,0 +1,59 @@
+#!/usr/bin/env python3
+"""Присмотр за своей правкой: если после неё станет хуже — бот разбудит тебя откатить.
+
+  watchfix --key pm2:vault --restore /path/app.conf=/path/app.conf.bak-20261024 --note "поменял порт"
+  watchfix --check "curl -fsS -m5 http://127.0.0.1:1889/" --minutes 15 --note "правка сервиса"
+  watchfix --list | --clear
+
+--key   — ключ автонадзора: pm2:<имя>, docker:<имя>, unit:<юнит>, proj:<id из registry>, node:<нода>
+--check — shell-команда (здесь, на этом сервере), код 0 = всё хорошо; для ноды: "nodes ИМЯ 'systemctl is-active caddy'"
+Плохо 3 проверки подряд (раз в минуту, после первых 2 минут) → бот будит тебя с [АВТООТКАТ] и списком бэкапов.
+"""
+import argparse, json, os, sys, time
+
+HOME = os.environ.get("NOOK_HOME", os.path.expanduser("~/nook"))
+PATH = os.path.join(HOME, "spool", "watchfix.json")
+
+
+def load():
+    try:
+        return json.load(open(PATH))
+    except Exception:
+        return []
+
+
+def save(items):
+    tmp = PATH + ".tmp"
+    json.dump(items, open(tmp, "w"), ensure_ascii=False, indent=1)
+    os.replace(tmp, PATH)
+
+
+ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+ap.add_argument("--key")
+ap.add_argument("--check")
+ap.add_argument("--restore", action="append", default=[], metavar="ORIG=BAK")
+ap.add_argument("--minutes", type=int, default=10)
+ap.add_argument("--note", default="")
+ap.add_argument("--list", action="store_true")
+ap.add_argument("--clear", action="store_true")
+a = ap.parse_args()
+if a.list:
+    for it in load():
+        print(f"{it.get('key') or it['check']}  ({it.get('note')}), до {time.strftime('%H:%M', time.localtime(it['at'] + it['minutes'] * 60))}")
+    sys.exit(0)
+if a.clear:
+    save([])
+    print("очищено")
+    sys.exit(0)
+if bool(a.key) == bool(a.check):
+    sys.exit("нужен ровно один из --key / --check")
+restore = []
+for r in a.restore:
+    orig, _, bak = r.partition("=")
+    if not bak or not os.path.exists(bak):
+        sys.exit(f"--restore {r}: нужен ORIG=BAK и существующий бэкап")
+    restore.append({"orig": orig, "bak": bak})
+items = load()
+items.append({"key": a.key, "check": a.check, "restore": restore, "minutes": a.minutes, "note": a.note, "at": time.time()})
+save(items)
+print(f"слежу {a.minutes} мин: {a.key or a.check}")

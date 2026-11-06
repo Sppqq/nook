@@ -1,0 +1,11 @@
+# Nook: root без пароля только для обслуживания сервера.
+# Установка: sudo bash ~/nook/setup/install-root.sh
+Cmnd_Alias NOOK_SVC  = /usr/bin/systemctl start *, /usr/bin/systemctl stop *, /usr/bin/systemctl restart *, \
+                          /usr/bin/systemctl reload *, /usr/bin/systemctl status *, /usr/bin/systemctl reset-failed *, \
+                          /usr/bin/systemctl enable *, /usr/bin/systemctl disable *, /usr/bin/systemctl daemon-reload
+Cmnd_Alias NOOK_LOGS = /usr/bin/journalctl *, /usr/bin/dmesg, /usr/bin/ss *
+Cmnd_Alias NOOK_APT  = /usr/bin/apt-get update, /usr/bin/apt-get -y upgrade, /usr/bin/apt-get clean, \
+                          /usr/bin/apt-get -y autoremove
+# Всё остальное — через nook-root: только одобренное хозяином кнопкой или в режиме полного доступа.
+Cmnd_Alias NOOK_ROOT = /usr/local/sbin/nook-root
+__NOOK_USERNAME__ ALL=(root) NOPASSWD: NOOK_SVC, NOOK_LOGS, NOOK_APT, NOOK_ROOT

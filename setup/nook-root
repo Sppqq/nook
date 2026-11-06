@@ -1,0 +1,80 @@
+#!/usr/bin/python3 -I
+"""nook-root ID — выполнить от root команду из запроса Nook, если хозяин её одобрил
+(кнопка «Выполнить» в Telegram) или включён режим полного доступа.
+
+Ставится root-владельцем в /usr/local/sbin; sudo разрешает владельцу запускать только его.
+Каждый запуск пишется в /var/log/nook-root.log (root-only, агент не может его стереть).
+"""
+import json, os, re, stat, subprocess, sys, time
+
+BASE = "__NOOK_USER_HOME__/nook/spool/root"
+LOG = "/var/log/nook-root.log"
+OWNER_UID = int('__NOOK_UID__')
+APPROVAL_TTL = 15 * 60    # одобрение действует 15 минут
+
+
+def log(msg):
+    fd = os.open(LOG, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+    os.write(fd, (time.strftime("%Y-%m-%d %H:%M:%S ") + msg.replace("\n", "\\n") + "\n").encode())
+    os.close(fd)
+
+
+def read_json(path):
+    """Читаем только обычный файл владельца, без симлинков."""
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    st = os.fstat(fd)
+    if not stat.S_ISREG(st.st_mode) or st.st_uid != OWNER_UID:
+        raise PermissionError(path)
+    with os.fdopen(fd) as f:
+        return json.load(f)
+
+
+def write_json(path, data):
+    tmp = path + ".tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "w") as f:
+        json.dump(data, f, ensure_ascii=False)
+    os.chown(tmp, OWNER_UID, OWNER_UID)
+    os.replace(tmp, path)
+
+
+def main():
+    if len(sys.argv) != 2 or not re.fullmatch(r"[a-f0-9]{8,32}", sys.argv[1]):
+        sys.exit("usage: nook-root ID")
+    rid = sys.argv[1]
+    st = os.lstat(BASE)
+    if not stat.S_ISDIR(st.st_mode) or st.st_uid != OWNER_UID:
+        sys.exit("bad spool dir")
+    path = os.path.join(BASE, rid + ".json")
+    req = read_json(path)
+    now = time.time()
+    try:
+        full = read_json(os.path.join(BASE, "full.json")).get("until", 0) > now
+    except (FileNotFoundError, PermissionError, ValueError):
+        full = False
+    approved = req.get("approved") and now - req.get("approved_at", 0) < APPROVAL_TTL
+    if req.get("done"):
+        sys.exit("уже выполнено")
+    if not (approved or full):
+        log(f"DENIED {rid} (не одобрено) cmd={req.get('cmd')!r}")
+        sys.exit("не одобрено хозяином")
+    mode = "approved" if approved else "full"
+    req["done"] = True
+    write_json(path, req)
+    log(f"RUN {rid} mode={mode} reason={req.get('reason')!r} cmd={req['cmd']!r}")
+    env = {"PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "HOME": "/root",
+           "LANG": "C.UTF-8", "DEBIAN_FRONTEND": "noninteractive"}
+    try:
+        p = subprocess.run(["/bin/bash", "-c", req["cmd"]], capture_output=True, text=True, env=env,
+                           timeout=int(req.get("timeout", 600)), cwd="/root", stdin=subprocess.DEVNULL)
+        code, out = p.returncode, (p.stdout + p.stderr)
+    except subprocess.TimeoutExpired as e:
+        code, out = 124, f"таймаут {e.timeout}s\n" + ((e.stdout or "") + (e.stderr or "") if isinstance(e.stdout, str) else "")
+    log(f"EXIT {rid} code={code}")
+    write_json(os.path.join(BASE, rid + ".result.json"), {"code": code, "output": out[-20000:], "mode": mode})
+    sys.stdout.write(out[-20000:])
+    sys.exit(code)
+
+
+if __name__ == "__main__":
+    main()

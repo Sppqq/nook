@@ -1,0 +1,122 @@
+# Nook
+
+**A little home for your server assistant.**
+
+Nook is a self-hosted Telegram assistant that helps you look after a Linux server. Ask it to inspect logs, investigate a failed service, check disk usage, or carry out maintenance. It keeps local notes between conversations and can ask for confirmation before privileged commands.
+
+[Русская инструкция](docs/README.ru.md) · [Security](SECURITY.md) · [Contributing](CONTRIBUTING.md) · [MIT license](LICENSE)
+
+> **Early preview — 0.1.0.** The Telegram interface and installation wizard are currently in Russian. Documentation is available in English and Russian. Full installation of this renamed release on a fresh VPS has not yet been verified; use a separate test server first.
+
+## What it does
+
+- Chat, images and files through your own Telegram bot, with task queues and a stop button.
+- Run tasks with Codex CLI, Google Antigravity CLI, or Mercury. Model availability depends on your provider account.
+- Continue Mercury conversations and use Mercury as a fallback when Codex runs out of quota.
+- Keep local Markdown notes, inspect projects, and watch services and resource usage.
+- Manage your other servers over SSH and schedule reminders or maintenance tasks.
+- Customize answer buttons, the main menu, icons, premium emoji, colors, and button layout. Choose a minimal, standard, or full layout.
+- Add trusted Python mods, agent skills, and separately configured integrations.
+- Optionally use a root helper that requests approval through Telegram.
+
+Nook is an autonomous administrative tool. It runs commands with the Linux user's permissions. Agent instructions are not a sandbox, and its monitoring does not replace backups. Read [SECURITY.md](SECURITY.md) before granting it access.
+
+## Install
+
+Use an interactive SSH terminal on Ubuntu 22.04/24.04 or an apt-based Debian system, with Python 3.10+, systemd, and a regular user who can use sudo. Other distributions and containers without user systemd need manual setup. Allow approximately 2 GB RAM for charts and optional voice recognition; actual usage depends on your workload.
+
+```bash
+git clone https://github.com/Sppqq/nook.git
+cd nook
+bash install.sh --check
+bash install.sh
+```
+
+The wizard asks for:
+
+1. A token for your own Telegram bot, created with [BotFather](https://t.me/BotFather).
+2. Your numeric Telegram user ID. Only that user can control the bot.
+3. Your own provider logins and, if you enable Mercury, an Inception Labs API key.
+
+Run as a regular user, not root. The default target is `~/nook`; installing from that clone uses it in place. Existing configured installations are never overwritten. Tokens are entered without echo and stored in files with mode `600`. The installation log is `~/.cache/nook/install.log`. The default timezone is `Europe/Moscow`; set your own with `--timezone`.
+
+Antigravity login is interactive: open the supplied link in your browser, finish authorization, and exit the client to continue installation. Provider authorization does not guarantee quota or model capacity.
+
+Open your bot in Telegram after setup. Do not run two instances with the same Telegram token.
+
+### Installation options
+
+```bash
+bash install.sh --timezone Europe/London
+bash install.sh --target "$HOME/my-nook"
+bash install.sh --skip-antigravity --skip-mercury  # Codex only
+bash install.sh --skip-codex --skip-antigravity    # Mercury only
+bash install.sh --voice                           # Local voice recognition
+bash install.sh --no-start                        # Prepare without starting
+bash install.sh --no-system-packages              # OS packages already installed
+```
+
+Codex is the default model. If you install only another provider, select it using the model button in Telegram. Each provider requires your own account; subscriptions, quotas, or API charges may apply. For unattended key entry, `--mercury-key-file` accepts a private local file.
+
+Resume provider setup or finish an interrupted service installation:
+
+```bash
+bash install.sh --providers-only --target "$HOME/nook"
+bash install.sh --finish-service --no-start --target "$HOME/nook"
+```
+
+Restart the service after reconfiguring providers:
+
+```bash
+systemctl --user status nook.service
+journalctl --user -u nook.service -n 80 --no-pager
+systemctl --user restart nook.service
+```
+
+The wizard enables user linger so the service can survive logout. Optional Whisper voice recognition downloads a model on first use and requires extra disk space.
+
+### Optional root helper
+
+Start without it. If you choose to install it, run this **from the configured installation**, after reading [SECURITY.md](SECURITY.md):
+
+```bash
+sudo bash setup/install-root.sh
+```
+
+The script asks for confirmation and validates sudoers. It permits specified service, log, and package operations without a password; other root commands use Telegram approval. Full-access mode bypasses individual confirmations until its expiry. This mechanism is not a security boundary against compromise of the bot's own Linux account.
+
+## Your data stays out of Git
+
+The repository contains source code and empty runtime templates under `templates/runtime/`. Installation creates `config.json`, `secrets.env`, `state.json`, `memory/`, `spool/`, `keys/`, `nodes.json`, and `ssh_config` locally. These paths, conversations, logs, backups, and uploaded files are ignored by Git. Provider credentials live in the user's home directory and are not distributed.
+
+Do not upload an installed directory or attach it wholesale to an issue. Review diffs before every commit: `.gitignore` is a convenience, not a secret scanner.
+
+The project registry starts empty at `memory/registry.json`. Ask Nook to inventory your projects, or maintain the registry yourself. `bin/projects --refresh` updates the snapshot.
+
+## Extensions and optional services
+
+- Trusted Python mods live in `mods/`; see `mods/_example.py`.
+- Agent instructions and skills live in `AGENTS.md` and `.agents/skills/`.
+- `owner_api`, `openbot_bridge`, and `codex_accounts` are disabled by default.
+- Account switching requires a separate compatible `codex-auth` utility (`list`, `switch`, and `import`). That utility is not bundled. Standard Codex login is independent of it.
+- OpenBot, Status Board, backups, DNS, GitHub, and MCP integrations need separate configuration and credentials. They are not preconfigured services in this release.
+
+The Russian menu labels for interface customization are `Меню → Настройки` (Menu → Settings), then `Под ответами` (Answers), `Главное меню` (Main menu), or `Оформление` (Appearance). Changes save immediately. Hidden sections remain available under `Ещё` (More); interface presets do not change monitoring or provider settings.
+
+## Development
+
+Tests use Python's standard library. Installer tests mock external calls and system changes; Gemini cleanup tests use local subprocesses without provider credentials.
+
+```bash
+python3 -m unittest discover -s tests -v
+python3 tools/build_release.py
+bash install.sh --check
+```
+
+The release builder uses Git's tracked file list, rejects private runtime paths and common credential patterns, and creates reproducible ZIP/JSON bundles plus checksums under `dist/`. Checksums detect corruption; they do not authenticate a download server.
+
+See [Architecture](docs/ARCHITECTURE.md), [Contributing](CONTRIBUTING.md), and [Changelog](CHANGELOG.md). This preview has automated tests, not an independent security audit or a complete clean-VPS acceptance test. Rollback monitoring depends on the bot remaining available. CLI providers and Telegram features may change independently.
+
+## License
+
+[MIT](LICENSE). External libraries and provider tools retain their own licenses and service terms. Nook is an independent project and is not affiliated with Telegram or its model providers.

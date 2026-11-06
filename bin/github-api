@@ -1,0 +1,48 @@
+#!/usr/bin/env python3
+"""GitHub REST API. Defaults to GET; JSON request body comes from stdin."""
+import argparse
+import json
+import sys
+import urllib.request
+import urllib.error
+from pathlib import Path
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('endpoint', help='API path, for example /user or /user/repos?per_page=100')
+    parser.add_argument('--method', choices=['GET', 'POST', 'PATCH', 'PUT', 'DELETE'], default='GET')
+    parser.add_argument('--json', action='store_true', help='Read JSON request body from stdin')
+    args = parser.parse_args()
+    if not args.endpoint.startswith('/') or args.endpoint.startswith('//') or '#' in args.endpoint:
+        parser.error('Use a GitHub API path beginning with a single slash')
+    secrets = Path(__file__).resolve().parent.parent / 'secrets.env'
+    token = None
+    for line in secrets.read_text().splitlines():
+        if line.startswith('GITHUB_PERSONAL_ACCESS_TOKEN='):
+            token = line.split('=', 1)[1].strip()
+    if not token:
+        parser.error('GitHub credential is not configured')
+    data = json.dumps(json.load(sys.stdin)).encode() if args.json else None
+    req = urllib.request.Request('https://api.github.com' + args.endpoint, data=data, method=args.method,
+        headers={'Authorization': 'Bearer ' + token, 'Accept': 'application/vnd.github+json',
+                 'X-GitHub-Api-Version': '2026-03-10', 'User-Agent': 'Nook',
+                 'Content-Type': 'application/json'})
+    try:
+        with urllib.request.build_opener(NoRedirect()).open(req, timeout=45) as response:
+            body = response.read().decode()
+            if body:
+                print(json.dumps(json.loads(body), ensure_ascii=False, indent=2))
+    except urllib.error.HTTPError as error:
+        print('GitHub HTTP %s' % error.code, file=sys.stderr)
+        return 1
+    except urllib.error.URLError:
+        print('GitHub network request failed', file=sys.stderr)
+        return 1
+    return 0
+
+if __name__ == '__main__':
+    sys.exit(main())

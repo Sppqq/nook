@@ -1,0 +1,14 @@
+#!/usr/bin/env python3
+"""Профиль, последние разговоры и история обращения коллеги OpenBot."""
+import json
+import runpy
+import sys
+
+module = runpy.run_path('__NOOK_USER_HOME__/nook/mods/openbot_bridge.py')
+agents = module['roster']()
+name = sys.argv[1] if len(sys.argv) > 1 else ''
+slug = next((k for k, v in agents.items() if name.casefold() in (k, v['name'].casefold(), v['openbot_id'])), '')
+if not slug:
+    print('Агенты: ' + ', '.join(k + ' (' + v['name'] + ')' for k, v in agents.items()))
+    sys.exit(2)
+print(json.dumps(module['context'](slug), ensure_ascii=False, indent=2))

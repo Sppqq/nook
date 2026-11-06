@@ -1,0 +1,8 @@
+{
+  "bot_token": "YOUR_BOT_TOKEN",
+  "owner_id": null,
+  "pair_code": "GENERATED_BY_INSTALLER",
+  "notify_mode": "quiet",
+  "patrol_time": "12:00",
+  "status_board_enabled": false
+}

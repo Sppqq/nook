@@ -1,0 +1,20 @@
+# Local runtime data; only templates/runtime contains distributable seeds.
+/config.json
+/secrets.env
+/state.json
+/nodes.json
+/ssh_config
+/memory/
+/keys/
+/spool/
+/inbox/
+/logs/
+/tmp/
+/.venv/
+/.codex/auth.json
+/.codex/sessions/
+/.env
+/dist/
+__pycache__/
+*.py[cod]
+*.bak*

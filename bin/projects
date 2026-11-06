@@ -1,0 +1,288 @@
+#!/usr/bin/env python3
+"""Refresh the private server project catalog. Does not start/stop services."""
+import collections
+import datetime as dt
+import json
+import os
+from pathlib import Path
+import pwd
+import re
+import subprocess
+import sys
+import urllib.request
+import base64
+from zoneinfo import ZoneInfo
+
+BASE = Path('__NOOK_USER_HOME__/nook')
+REGISTRY = Path(os.environ.get('NOOK_REGISTRY', str(BASE / 'memory/registry.json')))
+JSON_PATH = BASE / 'memory/projects.json'
+MD_PATH = BASE / 'memory/projects.md'
+
+
+def run(args, timeout=15):
+    p = subprocess.run(args, text=True, capture_output=True, timeout=timeout)
+    return p.stdout if p.returncode == 0 else ''
+
+
+def atomic(path, obj, is_json=False):
+    tmp = path.with_suffix(path.suffix + '.tmp')
+    tmp.write_text(json.dumps(obj, ensure_ascii=False, indent=2) + '\n' if is_json else obj)
+    tmp.chmod(0o600)
+    tmp.replace(path)
+
+
+def safe_path_status(value):
+    if not value.startswith('/'):
+        return 'not-local-path'
+    try:
+        Path(value).stat()
+        return 'present'
+    except FileNotFoundError:
+        return 'missing'
+    except PermissionError:
+        return 'permission-denied'
+    except OSError:
+        return 'unavailable'
+
+
+def proc_scan():
+    # Raw arguments stay in RAM only: they can contain passwords or tokens.
+    result = []
+    for p in Path('/proc').iterdir():
+        if not p.name.isdigit():
+            continue
+        try:
+            argv = [v.decode(errors='replace') for v in (p / 'cmdline').read_bytes().split(b'\0') if v]
+            if not argv:
+                continue
+            if Path(argv[0]).name in ('sh', 'bash', 'dash', 'zsh') and '-c' in argv[:3]:
+                continue
+            uid = p.stat().st_uid
+            try:
+                cwd = os.readlink(p / 'cwd')
+            except OSError:
+                cwd = None
+            result.append({'pid': int(p.name), 'user': pwd.getpwuid(uid).pw_name,
+                           'cwd': cwd, 'name': (p / 'comm').read_text().strip(),
+                           '_cmd': ' '.join(argv)})
+        except (OSError, KeyError):
+            continue
+    return result
+
+
+def sockets():
+    result = []
+    raw = run(['sudo', '-n', '/usr/bin/ss', '-lntupH'])
+    if not raw:
+        raw = run(['ss', '-lntupH'])
+    for line in raw.splitlines():
+        parts = line.split()
+        if len(parts) < 6:
+            continue
+        host, sep, port = parts[4].rpartition(':')
+        if not sep or not port.isdigit():
+            continue
+        result.append({'protocol': parts[0], 'bind': host, 'port': int(port),
+                       'pids': sorted({int(x) for x in re.findall(r'pid=(\d+)', line)})})
+    return result
+
+
+def unit_info(scope, name):
+    args = ['systemctl'] + (['--user'] if scope == 'user' else [])
+    out = run(args + ['show', name, '-p', 'LoadState', '-p', 'ActiveState', '-p', 'SubState',
+                      '-p', 'UnitFileState', '-p', 'MainPID', '-p', 'FragmentPath', '-p', 'WorkingDirectory'])
+    d = dict(line.split('=', 1) for line in out.splitlines() if '=' in line)
+    return {'scope': scope, 'name': name, **d}
+
+
+def repo_info(value):
+    p = Path(value)
+    if p.is_file():
+        p = p.parent
+    if not (p / '.git').exists():
+        return None
+    prefix = ['git', '--no-optional-locks', '-c', 'core.fsmonitor=false', '-C', str(p)]
+    branch = run(prefix + ['rev-parse', '--abbrev-ref', 'HEAD'], 8).strip()
+    revision = run(prefix + ['rev-parse', '--short', 'HEAD'], 8).strip()
+    changed = subprocess.run(prefix + ['status', '--porcelain', '--untracked-files=normal', '--ignore-submodules=all'],
+                             text=True, capture_output=True, timeout=8)
+    return {'root': str(p), 'branch': branch, 'revision': revision,
+            'changed_or_untracked_entries': len(changed.stdout.splitlines()) if changed.returncode == 0 else None,
+            'note': 'No git remote credentials or file contents stored.'}
+
+
+def discovery(registry):
+    known = [Path(p['path']) for p in registry['projects'] if p.get('path', '').startswith('/')]
+    hints = []
+    skips = {'__pycache__', 'node_modules', 'venv', '.venv', 'data', 'temp_check', 'temp_dacha'}
+    for folder in ['__NOOK_USER_HOME__', '__NOOK_USER_HOME__/bots', '__NOOK_USER_HOME__/projects', '__NOOK_USER_HOME__/sites', '__NOOK_USER_HOME__/tools']:
+        try:
+            for p in Path(folder).iterdir():
+                if not p.is_dir() or p.is_symlink() or os.path.ismount(p) or p.name.startswith('.') or p.name in skips:
+                    continue
+                if any(p == k or p in k.parents or k in p.parents for k in known):
+                    continue
+                if folder == '__NOOK_USER_HOME__':
+                    names = [f.name for f in p.iterdir() if f.is_file()]
+                    if not any(n in ('package.json', 'pyproject.toml', 'Dockerfile', 'go.mod', 'Cargo.toml', 'index.html')
+                               or n.endswith(('.py', '.js', '.mjs')) for n in names):
+                        continue
+                hints.append(str(p))
+        except OSError:
+            pass
+    return sorted(hints)
+
+
+def refresh():
+    os.umask(0o077)
+    registry = json.loads(REGISTRY.read_text())
+    previous = json.loads(JSON_PATH.read_text()) if JSON_PATH.exists() else {'projects': []}
+    context_path = BASE / 'memory/project-context.json'
+    context = json.loads(context_path.read_text()) if context_path.exists() else {}
+    proc = proc_scan()
+    listening = sockets()
+    req = urllib.request.Request('http://127.0.0.1:1467/api/status')
+    password = (REGISTRY.parent / '.password').read_text().strip()
+    req.add_header('Authorization', 'Basic ' + base64.b64encode((os.environ.get('USER', '') + ':' + password).encode()).decode())
+    try:
+        with urllib.request.urlopen(req, timeout=30) as response:
+            live = {p['id']: p for p in json.load(response)['projects']}
+    except Exception:
+        live = {}
+    pm2 = []
+    try:
+        for p in json.loads(run(['__NOOK_USER_HOME__/.npm-global/bin/pm2', 'jlist'])):
+            e = p['pm2_env']
+            pm2.append({'name': p['name'], 'pid': p.get('pid'), 'cwd': e.get('pm_cwd'),
+                        'script': e.get('pm_exec_path'), 'status': e.get('status'),
+                        'restart_count': e.get('restart_time')})
+    except (ValueError, KeyError):
+        pass
+    docker = []
+    ids = run(['docker', 'ps', '-aq']).split()
+    if ids:
+        for d in json.loads(run(['docker', 'inspect', *ids])):
+            labels = d.get('Config', {}).get('Labels') or {}
+            docker.append({'name': d['Name'].lstrip('/'), 'image': d['Config']['Image'],
+                           'state': d['State']['Status'], 'restart_policy': d['HostConfig']['RestartPolicy']['Name'],
+                           'ports': d.get('NetworkSettings', {}).get('Ports'),
+                           'mounts': [{'type': m['Type'], 'source': m['Source'], 'target': m['Destination']}
+                                      for m in d.get('Mounts', [])],
+                           'compose_project': labels.get('com.docker.compose.project'),
+                           'compose_workdir': labels.get('com.docker.compose.project.working_dir')})
+    projects = []
+    for original in registry['projects']:
+        p = dict(original)
+        p['remembered_context'] = context.get(p['id'], {})
+        observed = live.get(p['id'], {})
+        p['path_status'] = safe_path_status(p.get('path', ''))
+        hits = {}
+        for spec in p.get('procs', []):
+            for q in proc:
+                if spec['match'] not in q['_cmd']:
+                    continue
+                if spec.get('cwd') and spec['cwd'] != q['cwd']:
+                    continue
+                if spec.get('user') and spec['user'] != q['user']:
+                    continue
+                hits[q['pid']] = q
+        p['processes'] = [{k: v for k, v in q.items() if k != '_cmd'} for q in hits.values()]
+        if not p.get('procs') and p.get('kind') in ('source', 'static', 'tool'):
+            root = p.get('path', '').rstrip('/')
+            for q in proc:
+                if root and (q['cwd'] == root or (q['cwd'] or '').startswith(root + '/')
+                             or root + '/' in q['_cmd']):
+                    hits[q['pid']] = q
+            p['processes'] = [{k: v for k, v in q.items() if k != '_cmd'} for q in hits.values()]
+        units = p.get('units', {})
+        p['unit_observations'] = [unit_info(units.get('scope', 'user'), n) for n in units.get('names', [])]
+        for u in p['unit_observations']:
+            pid = int(u.get('MainPID') or 0)
+            q = next((q for q in proc if q['pid'] == pid), None)
+            if q and pid not in hits:
+                p['processes'].append({k: v for k, v in q.items() if k != '_cmd'})
+                hits[pid] = q
+        p['listening'] = [s for s in listening if set(s['pids']) & hits.keys()]
+        p['pm2'] = [m for m in pm2 if m['pid'] in hits or m['name'] in (p.get('pm2'), p['id'])]
+        p['containers'] = [d for d in docker if d['name'] in p.get('docker', [])]
+        p['dashboard_state'] = observed.get('state', 'unknown')
+        p['dashboard_checks'] = observed.get('checks', [])
+        if p.get('timers') or p.get('kind') == 'scheduled' or p['id'] == 'server-backup':
+            p['operational_note'] = 'Scheduled job: no permanent process is required; inspect last run and timer/cron.'
+        elif p['processes'] or any(d['state'] == 'running' for d in p['containers']):
+            p['operational_note'] = 'Process/container observed; this alone does not verify application behavior.'
+        elif p['path_status'] == 'missing':
+            p['operational_note'] = 'Legacy path is missing; project may have moved or been removed. Not restarted.'
+        else:
+            p['operational_note'] = 'No mapped running process found; may be a CLI/static project or an unrecognized launch.'
+        try:
+            p['git'] = repo_info(p.get('path', '')) if p.get('path', '').startswith('/') else None
+        except (OSError, subprocess.TimeoutExpired):
+            p['git'] = {'note': 'Metadata collection unavailable/timed out.'}
+        projects.append(p)
+    at = dt.datetime.now(ZoneInfo('Europe/Moscow')).isoformat()
+    result = {'updated_at': at, 'registry': str(REGISTRY), 'projects': projects,
+              'counts': dict(collections.Counter(p['dashboard_state'] for p in projects)),
+              'discovery_candidates': discovery(registry),
+              'unclassified_paths': registry.get('inventory_notes', {}).get('unclassified_paths', []),
+              'limitations': ['Only files readable by the current user are scanned.',
+                              'Does not traverse cloud/FUSE mounts, caches, dependencies or arbitrary credentials.',
+                              'Missing paths and offline flags do not prove a crash or authorize a restart.',
+                              'No raw command lines, environment variables, credential values or git remote URLs stored.']}
+    atomic(JSON_PATH, result, True)
+    old = {p['id']: p for p in previous['projects']}
+    changes = []
+    for p in projects:
+        q = old.get(p['id'])
+        if q is None:
+            changes.append({'id': p['id'], 'event': 'added', 'path': p.get('path')})
+        elif (p['dashboard_state'], p['path_status']) != (q['dashboard_state'], q['path_status']):
+            changes.append({'id': p['id'], 'event': 'observation_changed',
+                            'before': [q['dashboard_state'], q['path_status']],
+                            'after': [p['dashboard_state'], p['path_status']]})
+    if changes:
+        with (BASE / 'memory/projects-history.jsonl').open('a') as out:
+            out.write(json.dumps({'at': at, 'changes': changes}, ensure_ascii=False) + '\n')
+    lines = ['# Каталог проектов сервера', '', 'Обновлено: ' + at, '',
+             f'Основной реестр: `{REGISTRY}`. Это снимок; проверяй службы и процессы для текущего состояния.',
+             'Обновить: `~/nook/bin/projects --refresh`. Поиск: `~/nook/bin/projects текст`.', '',
+             f'Записей: {len(projects)}. Состояния проверок: ' + str(result['counts']), '',
+             'Offline не равнозначно поломке: есть CLI, статика, задания по расписанию и исторические записи.', '']
+    for group in registry.get('groups', []) + ['Прочее']:
+        subset = [p for p in projects if p.get('group', 'Прочее') == group]
+        if not subset:
+            continue
+        lines += ['## ' + group, '']
+        for p in subset:
+            lines += ['### ' + p['name'] + ' (`' + p['id'] + '`)', '',
+                      '- Путь: `' + p.get('path', '?') + '`; ' + p['path_status'] + '; владелец `' + p.get('owner', '?') + '`.',
+                      '- Назначение: ' + p.get('desc', 'Не установлено.'),
+                      '- Проверки: ' + p['dashboard_state'] + '; expected=' + str(p.get('expected')) + '.',
+                      '- Процессы: ' + (', '.join(str(x['pid']) + ' ' + x['name'] for x in p['processes']) or 'не обнаружены') + '.',
+                      '- Порты по реестру: ' + (', '.join(str(x['port']) for x in p.get('ports', [])) or 'нет/не установлены') + '.',
+                      '- Службы: ' + (', '.join(x['scope'] + ':' + x['name'] + '=' + x.get('ActiveState', '?') for x in p['unit_observations']) or 'не установлены') + '.',
+                      '- Автозапуск: ' + p.get('autostart', 'не установлен') + '.',
+                      '- Команда запуска: `' + p.get('start', 'не установлена') + '`.',
+                      '- Замечание: ' + p['operational_note'], '']
+            if p.get('git') and p['git'].get('revision'):
+                g = p['git']
+                lines += ['- Git: `' + g['branch'] + '` / `' + g['revision'] + '`; изменённых/неотслеживаемых записей: ' + str(g['changed_or_untracked_entries']) + '.', '']
+            if p['remembered_context']:
+                lines += ['- Память: ' + json.dumps(p['remembered_context'], ensure_ascii=False), '']
+    lines += ['## Неуточнённые пути', ''] + ['- `' + x + '`' for x in result['unclassified_paths'] + result['discovery_candidates']]
+    lines += ['', '## Ограничения', ''] + ['- ' + x for x in result['limitations']]
+    atomic(MD_PATH, '\n'.join(lines) + '\n')
+    print(json.dumps({'records': len(projects), 'states': result['counts'],
+                      'missing_paths': sum(p['path_status'] == 'missing' for p in projects),
+                      'discovery_candidates': result['discovery_candidates']}, ensure_ascii=False))
+
+
+if __name__ == '__main__':
+    if '--refresh' in sys.argv or not JSON_PATH.exists():
+        refresh()
+    else:
+        query = ' '.join(sys.argv[1:]).casefold()
+        data = json.loads(JSON_PATH.read_text())
+        for p in data['projects']:
+            if query in ' '.join([p['id'], p['name'], p.get('path', ''), p.get('desc', '')]).casefold():
+                print(p['id'] + ': ' + p['dashboard_state'] + ' | ' + p.get('path', '?') + ' | ' + p.get('autostart', '?'))
