@@ -23,6 +23,10 @@ Keep `config.json`, `secrets.env`, provider sessions, SSH keys, memory, runtime 
 
 Checksums check integrity, not the identity of a download source. Inspect installers and use trusted sources. Keep your own backups: monitoring and rollback depend on the bot being able to run.
 
+## Source updates
+
+The optional source updater trusts this GitHub repository over HTTPS and validates its integrity manifest; the manifest is not an independent signature. It preserves runtime data and policy/provider configuration, refuses conflicting local edits and incompatible updates, and backs up affected source files. Its independent supervisor checks startup and can restore code. This does not replace full backups or validate every feature. See [updates and recovery](docs/UPDATES.md). Do not bypass conflicts by resetting local files or replacing the entire installed directory.
+
 ## Reporting vulnerabilities
 
 Do not disclose credentials or exploitable details in a public issue. If GitHub's **Report a vulnerability** option is available in this repository's Security tab, use it. Otherwise, open a minimal issue requesting a private reporting channel without publishing the exploit or sensitive data. A dedicated private reporting address has not yet been configured.

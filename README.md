@@ -66,6 +66,12 @@ We have not run all three projects under the same workload. The process snapshot
 
 [Pair your Nook copies](docs/PEERS.md) over existing SSH access to exchange signed messages. Optional Mercury replies use no tools or server data. Open **More → Mods → Связь с копиями** in Telegram, or ask your assistant to connect a copy.
 
+## Update without reinstalling
+
+Open **More → Mods → Обновить Nook** to check GitHub and confirm an update. Nook preserves your configuration, memory, conversations, keys, and custom extensions. Conflicting local source changes stop the update. It backs up affected code, waits for current tasks, and uses an independent supervisor to restart the bot and roll back failed startup. Dependency or data-format migrations require separate work.
+
+[Update and recovery guide](docs/UPDATES.md) · CLI: `bin/nook-update check`. Automatic restarts support the installer's user `nook.service`; older installations need a reviewed initial migration. Do not rerun the installer to update.
+
 ## Install
 
 Use an interactive SSH terminal on Ubuntu 22.04/24.04 or an apt-based Debian system, with Python 3.10+, systemd, and a regular user who can use sudo. Other distributions and containers without user systemd need manual setup. Allow approximately 2 GB RAM for charts and optional voice recognition; actual usage depends on your workload.

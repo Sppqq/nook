@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Conservative GitHub source updater, Telegram confirmation, local-edit conflicts, preserved runtime data, independent restart supervision and source rollback.
+
 - Signed peer conversations over existing SSH, Telegram panel, optional text-only Mercury replies, replay protection and per-peer limits.
 - One-command GitHub bootstrap and interactive provider presets with a configuration preview.
 - Illustrated SVG banner in both READMEs and peer setup documentation.

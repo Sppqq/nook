@@ -374,6 +374,8 @@ def main():
         shutil.copytree(SOURCE, target, dirs_exist_ok=True, ignore=shutil.ignore_patterns('.git', 'dist', '__pycache__', '*.pyc', '*.bak*'))
     shutil.copytree(target / "templates/runtime", target, dirs_exist_ok=True)
     render(target)
+    from nook_update import record_install
+    record_install(target)
     for folder in ('memory','logs','inbox','keys','spool/outbox','spool/mods','spool/root','tmp'):
         (target / folder).mkdir(parents=True, exist_ok=True)
     cfg = json.loads((target / 'config.example.json').read_text())

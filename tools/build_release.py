@@ -11,7 +11,7 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[1]
 VERSION = '0.1.0'
 PRIVATE = {'memory', 'spool', 'keys', 'logs', 'inbox', 'tmp', 'dist', '.git', '.venv'}
-PRIVATE_FILES = {'config.json', 'state.json', 'nodes.json', 'ssh_config', 'secrets.env', '.env'}
+PRIVATE_FILES = {'.nook-runtime.lock', '.nook-install.json', 'config.json', 'state.json', 'nodes.json', 'ssh_config', 'secrets.env', '.env'}
 PATTERNS = (
     re.compile(r'-----BEGIN (?:OPENSSH |RSA |EC )?PRIVATE KEY-----'),
     re.compile(r'\b\d{6,12}:[A-Za-z0-9_-]{30,}\b'),
@@ -60,7 +60,7 @@ def build(root=ROOT):
     if 'LICENSE' not in names or 'install.py' not in names:
         raise SystemExit('Stage the reviewed source files with git add before building.')
     files = {name: validate_file(root, name) for name in names if name != 'MANIFEST.json'}
-    manifest = encode({'format': 1, 'version': VERSION, 'sha256': {
+    manifest = encode({'format': 1, 'update_api': 1, 'version': VERSION, 'sha256': {
         name: hashlib.sha256(data).hexdigest() for name, data in files.items()}})
     (root / 'MANIFEST.json').write_bytes(manifest)
     files['MANIFEST.json'] = manifest

@@ -8,6 +8,7 @@ import html
 import json
 import logging
 import os
+from pathlib import Path
 import re
 import shutil
 import signal
@@ -4657,6 +4658,7 @@ core.digest = lambda text, buttons=(): digest(text, buttons)
 core.bg_task = lambda prompt, title: run_task(bg_lane, prompt, background=True, show_progress=False, header=E("plus") + " ")
 core.codex_login = do_login
 core.bot, core.tg, core.state = bot, tg, STATE
+core.maintenance_lanes = (user_lane, bg_lane)
 REG = modsys.Registry(core)
 
 
@@ -4689,10 +4691,12 @@ async def core_import_ok():
 
 
 async def mods_loop():
+    from nook_update import heartbeat
     good_saved = False
     started = time.time()
     while True:
         try:
+            heartbeat(Path(HOME), REG.failed)
             if os.path.exists(modsys.RELOAD_FLAG):
                 os.remove(modsys.RELOAD_FLAG)
                 await mods_reload()
@@ -5076,6 +5080,13 @@ async def introduce():
 # ---------------------------------------------------------------- main
 
 async def main():
+    from nook_update import runtime_lock
+    # Keep the context alive for the whole polling lifetime.
+    with runtime_lock(Path(HOME)):
+        await run_main()
+
+
+async def run_main():
     for d in (OUTBOX, INBOX):
         os.makedirs(d, exist_ok=True)
     os.makedirs(modsys.SPOOL, exist_ok=True)
