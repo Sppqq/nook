@@ -11,8 +11,8 @@
     ".agents/skills/tg-bots/SKILL.md": "8c11588b901e96ba968f4e7318e415c4a5eaf92c0be4bc3b9e4abfe3b7be0dba",
     ".codex/config.toml": "2bce005cddf19d5d6f303813b253fd1e2272a6281e8505e07c73f44b349d1db4",
     ".github/dependabot.yml": "dfc31dd279937871ac4adfd4e25216ba06c528b82deca8e9b4b12b24d92791ac",
-    ".github/workflows/ci.yml": "f448d3b8f477314335957cec37fdef81d8b6ae34a17eda8e559ba506635f1c5e",
-    ".github/workflows/security.yml": "7dc2194c13040d073636c76dd6bfa8dce633ad3b2675676b25bc07ac0c92d07c",
+    ".github/workflows/ci.yml": "df86f6d5b1eaa2449bdb1e6226379aa8b4bdcb72d1e297f67f0811e5159c58da",
+    ".github/workflows/security.yml": "1ed776d9298a91129e96212f22eb217091bd7a2b3960178c4381fb2e62e3620a",
     ".gitignore": "01082d47fd5a12de6a86ec7b0ab3f3cdb23edb8d3215f2cd5b24dbf8c78cce53",
     "AGENTS.md": "54340538ca734a29058398067876db993f767a5a3cce088a465e466a7726890a",
     "CHANGELOG.md": "3341da4c65958e18f4305c50b9632770b43078f0892bfcda8694d3019da88e74",
@@ -58,7 +58,7 @@
     "nook_peers.py": "eaf311d080bda369d9ef41b775406cdf314e5d16980dcdaadb3b9ef44ada4889",
     "nook_update.py": "105b44c1bdeb7b400f887a648c4eaf0e50fac5a283e0963a2bb97565b426a966",
     "requirements-voice.txt": "db654cd5a2e811ba702079fbfac2320a612745cb9f10cd584e13ddff7fc6871a",
-    "requirements.txt": "82dcc77ca36e218a7638c8853210eb1ee27804ce9f4feecdc198742b039e163b",
+    "requirements.txt": "baa294148fda2e98c7b7dcbb7602f3af76191f7f304c7f7787f8f2d665518576",
     "secrets.env.example": "d9a4fcf24bb89ce0f95319c47088f94db16bf729e4782cb808f59975e4462264",
     "setup/install-root.sh": "9055e730ef163c385ce809e79207f98d29f3e8f88de6da0eaecd0fbcc05c7148",
     "setup/nook-api/api_cli.py": "2dc376014c1758903730e9d82e8bd5cd03cbb55a26dc723b8000c62353fb6e9b",
@@ -83,7 +83,7 @@
     "tests/test_ui_settings.py": "66d5bc2f13e962080e9f00e7991e773394df74ed4e2a913ab07f8cf2053495ac",
     "tests/test_updates.py": "da85843139bb00b078928c4c9b767a916895f72bc2e662d56b54e56af624417e",
     "tools/build_release.py": "1182af28de6d8bab6eedde54a68fdce9ea9a68982295e21dd64c8e4a5689a355",
-    "tools/smoke_runtime.py": "18fcffb32e9f4017492bf2e2684f79cc09473c5d30a2d53eff5ff612a5f60be4",
+    "tools/smoke_runtime.py": "211b10dc13b3304c0b35a261648a4793d4633f15b75514ce2ff15c10e5478de0",
     "ui_settings.py": "b89fe9109fae5ed221747e6cfec5b7bcd30547226b988a7dc6fb9859a16216b1"
   }
 }
