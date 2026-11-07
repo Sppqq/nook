@@ -10,6 +10,14 @@ Nook is a self-hosted Telegram assistant that helps you look after a Linux serve
 
 > **Early preview — 0.1.0.** The Telegram interface and installation wizard are currently in Russian. Documentation is available in English and Russian. Full installation of this renamed release on a fresh VPS has not yet been verified; use a separate test server first.
 
+## The main advantage: ask it to improve itself
+
+**Describe a capability in chat, and Nook can implement it in its own installation.** Add a menu button, connect a service, write a skill, or build a background task without doing the implementation yourself. The assistant can inspect its source, write a Python mod, check it, and load supported mods without restarting the bot. Larger changes can also involve the core, with backups, validation, and a restart when needed.
+
+For example: “Connect my copies so they can exchange messages” became the [peer messaging module](docs/PEERS.md), its Telegram button, and tests. Skills and separately configured integrations let the assistant add tools and keep the instructions for using them. This works within the Linux account's permissions and your approval settings; results still need verification.
+
+**This public repository was prepared and published by Domovoy itself**, the assistant from which Nook grew, at its owner's request. The work included preparing the source release, documentation, installer, banner, tests, and GitHub updates. The owner sets the direction; the assistant carries out the development. Third-party tools and dependencies retain their own authorship and licenses.
+
 ## What it does
 
 - Chat, images and files through your own Telegram bot, with task queues and a stop button.
@@ -25,7 +33,7 @@ Nook is an autonomous administrative tool. It runs commands with the Linux user'
 
 ## Why choose Nook over OpenClaw or Hermes Agent?
 
-**Choose Nook when your main job is looking after Linux servers from Telegram.** Its advantage is the combination of server maintenance tools and a customizable Telegram interface in one project.
+**Choose Nook for a server assistant that you can ask to extend itself from Telegram.** Its main strength is that conversational development workflow, combined with server maintenance tools and a customizable bot interface.
 
 - **Server care is built in.** Service and resource monitoring, a project inventory, SSH nodes, scheduled maintenance, and checks after a repair share the same workflow. Guard compares system snapshots for changes; `watchfix` can alert the agent when a registered health check fails so it can investigate or restore a backup. Configure your inventory, nodes, and checks for your own servers.
 - **Everyday controls stay in Telegram.** Pick a model, inspect available quotas, stop a task, continue a Mercury conversation, or approve a privileged command with buttons. Change which buttons appear, their layout, colors, and premium emoji directly in settings.
@@ -36,7 +44,23 @@ Nook is an autonomous administrative tool. It runs commands with the Linux user'
 
 [Hermes Agent](https://github.com/NousResearch/hermes-agent#readme) is worth choosing when you want a general agent with a terminal UI, a learning loop, skill creation, searchable conversation history, multiple execution backends, and messaging integrations.
 
-Both projects also support Telegram and extensibility; those features alone are not unique to Nook. This comparison describes fit, based on their official READMEs reviewed on November 6, 2026. Nook has no comparative benchmarks establishing better speed, cost, reliability, or security. It is an early preview, with a Russian interface and a fresh-VPS installation still to validate.
+Both projects also support Telegram and extensibility; those features alone are not unique to Nook. This comparison describes fit, based on their official READMEs reviewed on November 6, 2026; resource documentation was checked on November 7, 2026. Nook has no comparative benchmarks establishing better speed, cost, reliability, or security. It is an early preview, with a Russian interface and a fresh-VPS installation still to validate.
+
+## Resource usage: Nook, OpenClaw, and Hermes
+
+These are **documented deployment requirements, not measured process consumption**:
+
+| Project | RAM guidance | CPU guidance |
+| --- | --- | --- |
+| Nook | Approximately 2 GB recommended in this installation guide for charts and optional voice recognition; minimum not established | Minimum not established |
+| OpenClaw | 1 GB absolute minimum | 1 core minimum |
+| Hermes Agent (Docker) | 1 GB minimum; 2–4 GB recommended | 1 core minimum; 2 cores recommended |
+
+Sources: [OpenClaw official quick-start FAQ](https://docs.openclaw.ai/help/faq-first-run/quick-start) and [Hermes official Docker resource limits](https://hermes-agent.nousresearch.com/docs/user-guide/docker#resource-limits), checked November 7, 2026. Hermes recommends at least 2 GB with browser tools. Nook's 2 GB guidance is a starting recommendation, not a validated limit for every workload.
+
+**A real Nook-origin instance used about 103 MiB RSS for its main bot process.** This was Domovoy, the running installation from which Nook was extracted, sampled on November 7, 2026: three one-second-spaced Linux `/proc/<pid>/status` readings each reported `VmRSS: 105384 kB`. It was running during a documentation task, not a controlled idle benchmark of a fresh Nook installation. This excludes agent CLI subprocesses, browser processes, local voice recognition, and the rest of the server.
+
+We have not run all three projects under the same workload. The process snapshot cannot be compared directly with machine RAM requirements, and it does not establish that Nook uses less total memory or CPU. Browser automation, local models, voice recognition, and concurrent tasks can substantially increase usage. No comparable CPU or peak-memory measurements are available yet.
 
 ## Connected assistants
 
