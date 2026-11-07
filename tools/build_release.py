@@ -9,7 +9,7 @@ import subprocess
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = '0.1.0'
+VERSION = '0.1.1'
 PRIVATE = {'memory', 'spool', 'keys', 'logs', 'inbox', 'tmp', 'dist', '.git', '.venv'}
 PRIVATE_FILES = {'.nook-runtime.lock', '.nook-install.json', 'config.json', 'state.json', 'nodes.json', 'ssh_config', 'secrets.env', '.env'}
 PATTERNS = (

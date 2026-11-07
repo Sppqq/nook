@@ -894,9 +894,9 @@ def antigravity_capacity_error(log_path):
                 "Попробуй позже или выбери другую глубину кнопкой «Модель».")
     return None
 
-async def wait_antigravity(proc, log_path, timeout):
+async def wait_antigravity(proc, log_path, timeout, collect=None):
     """Drain both pipes while watching this invocation's private diagnostic log."""
-    output = asyncio.create_task(proc.communicate())
+    output = asyncio.create_task(collect() if collect else proc.communicate())
 
     async def stop():
         if proc.returncode is None:
@@ -931,6 +931,20 @@ async def wait_antigravity(proc, log_path, timeout):
     finally:
         if not output.done():
             await stop()
+        elif proc.returncode is None:
+            # A stream/progress handler can fail before the child exits.
+            try:
+                os.killpg(proc.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            try:
+                await asyncio.wait_for(proc.wait(), 5)
+            except asyncio.TimeoutError:
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                await proc.wait()
 
 async def run_antigravity(prompt, thread_id=None, images=(), on_step=None, run: Run = None, timeout=USER_TIMEOUT):
     """Один автономный вызов CLI-агента Antigravity. (thread_id, final, error)."""
@@ -941,39 +955,90 @@ async def run_antigravity(prompt, thread_id=None, images=(), on_step=None, run: 
     eff = CFG.get("effort") or "medium"
     if eff not in ("low", "medium", "high"):
         eff = "medium"
-    agy_timeout = min(timeout, 180) if eff == "high" else timeout
     mid = f"gemini-3.8-flash-{eff}" if CFG.get("model") == "antigravity-flash38" else f"gemini-4-argon-{eff}"
     # Доверенный агент хозяина работает без интерактивного терминала, как Codex.
     # Системные права при этом по-прежнему ограничены пользователем ОС/rootdo.
+    conversations = STATE.setdefault("agy_threads", {})
+    cmd = [AGY_BIN, "--model", mid, "--dangerously-skip-permissions", "--output-format", "stream-json"]
+    if conversations.get(tid):
+        cmd += ["--conversation", conversations[tid]]
+    cmd += ["-p", prompt]
+    run_id = uuid.uuid4().hex[:12]
+    RUN_THREADS[run_id] = tid
     with tempfile.TemporaryDirectory(prefix="agy-run-", dir=os.path.join(HOME, "spool")) as log_dir:
         log_path = os.path.join(log_dir, "cli.log")
-        cmd = [AGY_BIN, "--model", mid, "--log-file", log_path, "--dangerously-skip-permissions", "--output-format", "json", "-p", prompt]
+        cmd += ["--log-file", log_path]
+        return await _stream_antigravity(cmd, tid, conversations, run_id, run, on_step, timeout)
+
+
+async def _stream_antigravity(cmd, tid, conversations, run_id, run, on_step, timeout):
+    final, err = "", None
+    log_path = cmd[cmd.index("--log-file") + 1]
+    try:
         proc = await asyncio.create_subprocess_exec(
-            *cmd, cwd=HOME, env=codex_env(), start_new_session=True,
+            *cmd, cwd=HOME, env=codex_env(run_id), start_new_session=True, limit=1024 * 1024,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
         run.proc = proc
+        result = None
+
+        async def read_output():
+            nonlocal result
+            async for line in proc.stdout:
+                try:
+                    event = json.loads(line)
+                except (ValueError, TypeError):
+                    continue
+                if not isinstance(event, dict):
+                    continue
+                cid = event.get("conversation_id")
+                if event.get("event") == "init" and isinstance(cid, str) and cid:
+                    conversations[tid] = cid
+                    for key in list(conversations)[:-100]:
+                        del conversations[key]
+                    save_state()
+                if event.get("event") == "result":
+                    result = event.get("result")
+                step = event.get("step_update") or {}
+                if not isinstance(step, dict):
+                    continue
+                if on_step and step.get("step_type") == "tool" and step.get("state") in ("ACTIVE", "DONE"):
+                    # Не показывать аргументы инструментов: там могут быть секреты.
+                    mark = "▸ " if step["state"] == "ACTIVE" else "✓ "
+                    await on_step(mark + "Gemini: " + str(step.get("tool_name") or "инструмент")[:80])
+
+        async def collect():
+            _, diagnostic = await asyncio.gather(read_output(), proc.stderr.read())
+            await proc.wait()
+            return b"", diagnostic
+
         try:
-            out, diagnostic, backend_error = await wait_antigravity(proc, log_path, agy_timeout)
-            if backend_error:
-                final, err, data = "", backend_error, {}
-            else:
-                final, err, data = antigravity_result(out.decode(errors="replace").strip(), proc.returncode)
-            if not err:
-                usage = data.get("usage") or {}
-                tok = int(usage.get("total_tokens") or 0)
-                nowd = dt.date.today().isoformat()
-                agy = STATE.setdefault("agy_usage", {"date": nowd, "tokens": 0, "tasks": 0})
-                if agy["date"] != nowd:
-                    agy["date"], agy["tokens"], agy["tasks"] = nowd, 0, 0
-                agy["tokens"] += tok
-                agy["tasks"] += 1
-                agy["last"] = time.time()
-                save_state()
-            elif diagnostic:
-                log.warning("Antigravity failed: exit=%s, diagnostic_bytes=%s", proc.returncode, len(diagnostic))
+            _, diagnostic, backend_error = await wait_antigravity(proc, log_path, timeout, collect)
         except asyncio.TimeoutError:
-            final, err = "", (f"Gemini не отвечает: ожидание {agy_timeout} с истекло, запрос остановлен. "
-                              "Попробуй позже или выбери другую глубину кнопкой «Модель».")
+            return tid, "", f"Gemini не отвечает: ожидание {timeout} с истекло, запрос остановлен."
+        if run.cancelled:
+            return tid, "", "остановлено"
+        if backend_error:
+            final, err, data = "", backend_error, {}
+        else:
+            final, err, data = antigravity_result(json.dumps(result), proc.returncode)
+        if not err:
+            usage = data.get("usage") or {}
+            tok = int(usage.get("total_tokens") or 0)
+            nowd = dt.date.today().isoformat()
+            agy = STATE.setdefault("agy_usage", {"date": nowd, "tokens": 0, "tasks": 0})
+            if agy["date"] != nowd:
+                agy["date"], agy["tokens"], agy["tasks"] = nowd, 0, 0
+            agy["tokens"] += tok
+            agy["tasks"] += 1
+            agy["last"] = time.time()
+            save_state()
+        elif diagnostic:
+            log.warning("Antigravity failed: exit=%s, diagnostic_bytes=%s", proc.returncode, len(diagnostic))
+    except Exception as e:
+        log.warning("Antigravity runner failed: %s", type(e).__name__)
+        err = "Antigravity: не удалось выполнить запрос"
+    finally:
+        RUN_THREADS.pop(run_id, None)
     return tid, final, err
 
 
@@ -996,9 +1061,16 @@ def engine_for(thread_id=None):
 
 async def run_agent(prompt, thread_id=None, images=(), on_step=None, run=None, timeout=USER_TIMEOUT):
     engine = engine_for(thread_id)
-    if thread_id and is_mercury_thread(thread_id) != (engine == "mercury"):
+    thread_engine = ("mercury" if is_mercury_thread(thread_id) else
+                     "antigravity" if str(thread_id or "").startswith("agy-") else "codex")
+    if thread_id and thread_engine != engine:
         # разговор другого движка продолжить нельзя: свой разговор-двойник (xthreads) + прошлый ответ как контекст
         twin = STATE.get("xthreads", {}).get(thread_id)
+        if twin:
+            twin_engine = ("mercury" if is_mercury_thread(twin) else
+                           "antigravity" if str(twin).startswith("agy-") else "codex")
+            if twin_engine != engine:
+                twin = None
         if not twin:
             ctx = STATE.get("last_answer", {}).get(thread_id, "")
             if ctx:
@@ -1487,7 +1559,7 @@ def mq_kb(nums, answers, extra_rows=()):
 def result_kb(final, incident=None, err=None, fav=False, mercury=False):
     """Кнопки под ответом агента: продолжение разговора одним нажатием."""
     rows = []
-    if mercury:
+    if mercury and err == f"не уложился в {MERCURY_STEPS} шагов":
         rows.append((btn("Продолжить", "th:continue", "repeat", "primary"),))
     nums = multi_questions(final)
     if nums:

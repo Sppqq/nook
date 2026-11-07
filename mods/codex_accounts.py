@@ -14,7 +14,7 @@ def account_id(account):
 
 async def cli(*args, json_output=True):
     proc = await asyncio.create_subprocess_exec(
-        'codex-auth', *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        shutil.which('codex-auth') or str(Path.home()/'.npm-global/bin/codex-auth'), *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
     try:
         out, _ = await asyncio.wait_for(proc.communicate(), 30)
     except BaseException:
@@ -36,6 +36,10 @@ def setup(m):
     # Core exports its login handler; use that handler's lock/state persistence
     # so device login and saved-account switching cannot overwrite each other.
     core = m.core.codex_login.__globals__
+
+    def busy():
+        return any(getattr(core.get(name), 'current', None)
+                   for name in ('user_lane', 'bg_lane'))
 
     async def show(ctx, *, edit=False):
         try:
@@ -61,7 +65,7 @@ def setup(m):
         login_lock = core['CODEX_LOGIN_LOCK']
         if lock.locked() or login_lock.locked():
             return await ctx.toast('Смена аккаунта уже выполняется. Дождись её завершения.')
-        if any(getattr(core.get(name), 'current', None) for name in ('user_lane', 'bg_lane')):
+        if busy():
             return await ctx.toast('Сначала дождись завершения текущей задачи, затем выбери аккаунт снова.')
         async with lock, login_lock:
             backup = None
@@ -107,12 +111,26 @@ def setup(m):
 
     @m.callback('login')
     async def login(ctx):
+        if lock.locked() or core['CODEX_LOGIN_LOCK'].locked():
+            return await ctx.toast('Вход или смена аккаунта уже выполняется.')
+        if busy():
+            return await ctx.toast('Дождись завершения текущей задачи, затем открой вход снова.')
         async def run():
-            await m.core.codex_login(ctx.chat)
-            try:
-                await cli('import', str(Path.home()/'.codex/auth.json'), json_output=False)
-            except (OSError, RuntimeError, ValueError, asyncio.TimeoutError):
-                return await ctx.toast('Не удалось добавить вход в список аккаунтов. Сам вход Codex сохранён.')
+            async with lock:
+                thread = str(m.core.state.get('main_thread') or '')
+                try:
+                    # Save the current account before the core device flow replaces it.
+                    await accounts()
+                    await m.core.codex_login(ctx.chat)
+                    await cli('import', str(Path.home()/'.codex/auth.json'), json_output=False)
+                    core['LIMITS_CACHE'].update(data=None, at=0.0)
+                except (OSError, RuntimeError, ValueError, asyncio.TimeoutError):
+                    await m.send('Не удалось обновить список аккаунтов Codex. Открой его ещё раз.')
+                finally:
+                    if thread.startswith(('merc-', 'agy-')):
+                        m.core.state['main_thread'] = thread
+                        core['save_state']()
             await show(ctx, edit=True)
         await ctx.toast('Открываю вход в новый аккаунт')
-        asyncio.create_task(run())
+        task = asyncio.create_task(run())
+        m.tasks.append(task)

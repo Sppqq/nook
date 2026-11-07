@@ -8,7 +8,9 @@ Nook is a self-hosted Telegram assistant that helps you look after a Linux serve
 
 [Русская инструкция](docs/README.ru.md) · [Security](SECURITY.md) · [Contributing](CONTRIBUTING.md) · [MIT license](LICENSE)
 
-> **Early preview — 0.1.0.** The Telegram interface and installation wizard are currently in Russian. Documentation is available in English and Russian. Full installation of this renamed release on a fresh VPS has not yet been verified; use a separate test server first.
+> **Early preview — 0.1.1.** The Telegram interface and installation wizard are currently in Russian. Documentation is available in English and Russian. Full installation of this renamed release on a fresh VPS has not yet been verified; use a separate test server first.
+
+Changes in this release: [changelog](docs/CHANGELOG.md).
 
 ## The main advantage: ask it to improve itself
 
