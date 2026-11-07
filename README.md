@@ -1,4 +1,4 @@
-![Nook — a little home for your server assistant.](docs/assets/banner.svg)
+![Nook — a little home for your server assistant.](https://raw.githubusercontent.com/Sppqq/nook/bdf58f8/docs/assets/banner-20261107.jpg)
 
 # Nook
 
