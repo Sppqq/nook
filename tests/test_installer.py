@@ -68,4 +68,32 @@ class InstallerTests(unittest.TestCase):
    self.assertNotIn('__NOOK_HOME__', (self.target/'bot.py').read_text())
    self.assertTrue((self.target/'memory/notes.md').is_file())
    self.assertEqual(json.loads((self.target/'nodes.json').read_text()), [])
-if __name__=='__main__':unittest.main()
+   # A Mercury-only installation must work on its first conversation.
+   mercury_target=self.home/'mercury-only'
+   mercury_argv=argv+['--skip-codex','--skip-antigravity','--target',str(mercury_target)]
+   with patch.object(sys,'argv',mercury_argv),patch.object(m,'setup_service'):
+    m.main()
+   self.assertEqual(json.loads((mercury_target/'config.json').read_text())['model'],'mercury-3')
+
+class WizardTests(unittest.TestCase):
+ def args(self, **kwargs):
+  values=dict(yes=False,skip_codex=False,skip_antigravity=False,skip_mercury=False,voice=False,timezone='Europe/Moscow',no_start=True)
+  values.update(kwargs)
+  return SimpleNamespace(**values)
+ def test_presets_invalid_retry_and_voice(self):
+  args=self.args()
+  with patch.object(m.sys.stdin,'isatty',return_value=True),patch('builtins.input',side_effect=['bad','3','да']),contextlib.redirect_stdout(io.StringIO()):
+   m.choose_options(args)
+  self.assertTrue(args.skip_codex);self.assertTrue(args.skip_antigravity);self.assertFalse(args.skip_mercury);self.assertTrue(args.voice)
+ def test_explicit_provider_flags_preserved(self):
+  args=self.args(skip_antigravity=True,skip_mercury=True)
+  with patch.object(m.sys.stdin,'isatty',return_value=True),patch('builtins.input',return_value='n') as prompt:
+   m.choose_options(args)
+  self.assertEqual(prompt.call_count,1);self.assertFalse(args.skip_codex)
+ def test_cancel_plan_and_no_empty_provider_set(self):
+  with patch.object(m.sys.stdin,'isatty',return_value=True),patch('builtins.input',return_value='n'),contextlib.redirect_stdout(io.StringIO()):
+   with self.assertRaises(SystemExit):m.confirm_plan(self.args(),Path('/tmp/nook'))
+  with self.assertRaises(SystemExit):m.confirm_plan(self.args(skip_codex=True,skip_antigravity=True,skip_mercury=True),Path('/tmp/nook'))
+
+if __name__ == "__main__":
+ unittest.main()

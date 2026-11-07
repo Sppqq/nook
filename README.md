@@ -1,3 +1,5 @@
+![Nook — a little home for your server assistant.](docs/assets/banner.svg)
+
 # Nook
 
 **A little home for your server assistant.**
@@ -36,9 +38,21 @@ Nook is an autonomous administrative tool. It runs commands with the Linux user'
 
 Both projects also support Telegram and extensibility; those features alone are not unique to Nook. This comparison describes fit, based on their official READMEs reviewed on November 6, 2026. Nook has no comparative benchmarks establishing better speed, cost, reliability, or security. It is an early preview, with a Russian interface and a fresh-VPS installation still to validate.
 
+## Connected assistants
+
+[Pair your Nook copies](docs/PEERS.md) over existing SSH access to exchange signed messages. Optional Mercury replies use no tools or server data. Open **More → Mods → Связь с копиями** in Telegram, or ask your assistant to connect a copy.
+
 ## Install
 
 Use an interactive SSH terminal on Ubuntu 22.04/24.04 or an apt-based Debian system, with Python 3.10+, systemd, and a regular user who can use sudo. Other distributions and containers without user systemd need manual setup. Allow approximately 2 GB RAM for charts and optional voice recognition; actual usage depends on your workload.
+
+Install with one command from an interactive SSH terminal:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Sppqq/nook/main/bootstrap.sh | bash
+```
+
+The wizard offers a provider preset, optional voice recognition, a configuration preview, hidden token entry, and progress indicators. It downloads a coherent GitHub snapshot and checks its manifest before installing. To inspect the source first:
 
 ```bash
 git clone https://github.com/Sppqq/nook.git
@@ -71,7 +85,7 @@ bash install.sh --no-start                        # Prepare without starting
 bash install.sh --no-system-packages              # OS packages already installed
 ```
 
-Codex is the default model. If you install only another provider, select it using the model button in Telegram. Each provider requires your own account; subscriptions, quotas, or API charges may apply. For unattended key entry, `--mercury-key-file` accepts a private local file.
+Codex is the default preset. If you choose only another provider, the installer selects it as the initial model. Use `--yes` to keep CLI flags and skip the preset menu and plan confirmation; account logins remain interactive. Each provider requires your own account; subscriptions, quotas, or API charges may apply. For unattended key entry, `--mercury-key-file` accepts a private local file.
 
 Resume provider setup or finish an interrupted service installation:
 

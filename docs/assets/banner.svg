@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="420" viewBox="0 0 1280 420" role="img" aria-labelledby="title desc">
+<title id="title">Nook — a little home for your server assistant</title>
+<desc id="desc">An illuminated house and connected server nodes on a dark midnight background. Telegram, server care, connected assistants.</desc>
+<defs>
+ <linearGradient id="bg" x2="1" y2="1"><stop stop-color="#101d30"/><stop offset="1" stop-color="#172e36"/></linearGradient>
+ <linearGradient id="roof" x2="1" y2="1"><stop stop-color="#a6edc9"/><stop offset="1" stop-color="#65bfab"/></linearGradient>
+ <radialGradient id="glow"><stop stop-color="#70d9af" stop-opacity=".20"/><stop offset="1" stop-color="#70d9af" stop-opacity="0"/></radialGradient>
+</defs>
+<rect width="1280" height="420" rx="24" fill="url(#bg)"/>
+<circle cx="1030" cy="210" r="235" fill="url(#glow)"/>
+<g stroke="#49736f" stroke-width="2" fill="none" opacity=".65"><path d="M972 164L1115 105L1172 274L1038 326L908 275Z"/><path d="M1115 105L1038 326M908 275L1172 274"/></g>
+<g fill="#82d9b7"><circle cx="1115" cy="105" r="7"/><circle cx="1172" cy="274" r="7"/><circle cx="1038" cy="326" r="7"/><circle cx="908" cy="275" r="7"/></g>
+<path d="M900 193L1004 105L1108 193" stroke="url(#roof)" stroke-width="17" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+<path d="M925 194V288H1083V194" fill="#203f43" stroke="#83d8b7" stroke-width="5" stroke-linejoin="round"/>
+<rect x="957" y="211" width="37" height="42" rx="7" fill="#ffe6a7"/>
+<path d="M975 212V253M958 232H992" stroke="#c09f64" stroke-width="3"/>
+<rect x="1016" y="223" width="37" height="65" rx="6" fill="#102c33"/>
+<circle cx="1043" cy="258" r="3" fill="#ffe6a7"/>
+<g font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif">
+ <text x="78" y="95" fill="#92d7bd" font-size="15" font-weight="600" letter-spacing="5">YOUR SERVER. A LITTLE MORE ALIVE.</text>
+ <text x="72" y="215" fill="#f0f7f3" font-size="114" font-weight="750" letter-spacing="-6">nook<tspan fill="#98e6c3">.</tspan></text>
+ <text x="78" y="266" fill="#bbd0cf" font-size="27">A little home for your server assistant.</text>
+ <g font-size="15" fill="#cee9dc">
+  <rect x="78" y="313" width="118" height="37" rx="18" fill="#29453f"/><text x="100" y="337">Telegram</text>
+  <rect x="208" y="313" width="131" height="37" rx="18" fill="#29453f"/><text x="227" y="337">Server care</text>
+  <rect x="351" y="313" width="187" height="37" rx="18" fill="#29453f"/><text x="370" y="337">Connected assistants</text>
+ </g>
+</g>
+</svg>

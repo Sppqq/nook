@@ -36,6 +36,44 @@ def banner():
 def section(number, title):
     print(paint('\n  [' + str(number) + '/7] ' + title, '1;36'), flush=True)
 
+def choose_options(args):
+    """Keep explicit CLI flags; offer presets during a normal interactive install."""
+    if not sys.stdin.isatty() or args.yes:
+        return
+    if not any((args.skip_codex, args.skip_antigravity, args.skip_mercury)):
+        print(paint('  Какие модели поселим в Nook?', '1;36'))
+        print('  1  Codex                 · вход через аккаунт [по умолчанию]')
+        print('  2  Antigravity           · вход через Google')
+        print('  3  Mercury               · API-ключ Inception Labs')
+        print('  4  Все три               · переключение и резервная модель')
+        while True:
+            choice = input('  Твой выбор [1–4, Enter = 1]: ').strip() or '1'
+            if choice in ('1', '2', '3', '4'):
+                break
+            print('  Введи число от 1 до 4.')
+        args.skip_codex = choice not in ('1', '4')
+        args.skip_antigravity = choice not in ('2', '4')
+        args.skip_mercury = choice not in ('3', '4')
+    if not args.voice:
+        args.voice = input('  Добавить локальное распознавание голосовых? [y/N]: ').strip().lower() in ('y', 'yes', 'д', 'да')
+
+
+def confirm_plan(args, target):
+    providers = [name for name, skip in (('Codex', args.skip_codex),
+                 ('Antigravity', args.skip_antigravity), ('Mercury', args.skip_mercury)) if not skip]
+    if not providers:
+        raise SystemExit('Выбери хотя бы одну модель.')
+    print(paint('\n  Твой Nook', '1;36'))
+    print('  Папка     ' + str(target))
+    print('  Модели    ' + ' · '.join(providers))
+    print('  Часовой пояс  ' + args.timezone)
+    print('  Голосовые ' + ('да' if args.voice else 'нет'))
+    print('  Автозапуск ' + ('подготовить без запуска' if args.no_start else 'systemd, запуск после установки'))
+    if sys.stdin.isatty() and not args.yes:
+        if input('  Всё верно, установить? [Y/n]: ').strip().lower() not in ('', 'y', 'yes', 'д', 'да'):
+            raise SystemExit('Установка отменена, настройки не изменены.')
+
+
 def quiet(args, label, **kwargs):
     log = Path.home() / '.cache/nook/install.log'
     log.parent.mkdir(parents=True, exist_ok=True)
@@ -267,6 +305,7 @@ def setup_service(target, timezone, no_start, path_env):
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--check', action='store_true')
+    ap.add_argument('--yes', action='store_true', help='Пропустить выбор набора и подтверждение плана')
     ap.add_argument('--target', type=Path, default=Path.home() / 'nook')
     ap.add_argument('--no-start', action='store_true')
     ap.add_argument('--no-system-packages', action='store_true')
@@ -311,6 +350,8 @@ def main():
         raise SystemExit('Путь содержит неподдерживаемые символы.')
     if (target / 'config.json').exists() or (target != SOURCE and target.exists() and any(target.iterdir())):
         raise SystemExit('Папка назначения уже используется. Установка ничего не перезапишет.')
+    choose_options(args)
+    confirm_plan(args, target)
     section(1, 'Знакомство · Telegram')
     token = args.token_file.read_text().strip() if args.token_file else getpass.getpass('Токен НОВОГО Telegram-бота от BotFather (ввод скрыт): ').strip()
     if not re.fullmatch(r'\d+:[A-Za-z0-9_-]{30,}', token):
@@ -337,6 +378,8 @@ def main():
         (target / folder).mkdir(parents=True, exist_ok=True)
     cfg = json.loads((target / 'config.example.json').read_text())
     cfg.update(bot_token=token, owner_id=owner, pair_code=secrets.token_urlsafe(24))
+    if args.skip_codex:
+        cfg['model'] = 'antigravity' if not args.skip_antigravity else 'mercury-3'
     (target / 'config.json').write_text(json.dumps(cfg, ensure_ascii=False, indent=2) + '\n')
     (target / 'config.json').chmod(0o600)
     (target / 'secrets.env').write_text((target / 'secrets.env.example').read_text())
