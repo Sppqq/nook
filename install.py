@@ -6,7 +6,7 @@ import getpass
 import hashlib
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import platform
 import re
 import secrets
@@ -111,14 +111,43 @@ def run(args, **kw):
     subprocess.run([str(x) for x in args], check=True, **kw)
 
 def validate(root):
-    manifest = json.loads((root / 'MANIFEST.json').read_text())
-    for rel, expected in manifest['sha256'].items():
-        p = root / rel
-        if not p.is_file() or p.is_symlink() or hashlib.sha256(p.read_bytes()).hexdigest() != expected:
+    manifest_path = root / 'MANIFEST.json'
+    if manifest_path.is_symlink():
+        raise SystemExit('Манифест не может быть ссылкой.')
+    manifest = json.loads(manifest_path.read_text())
+    if manifest.get('format') != 1 or not manifest.get('sha256'):
+        raise SystemExit('Неизвестный формат исходников.')
+    expected = set(manifest['sha256']) | {'MANIFEST.json'}
+    for rel, wanted in manifest['sha256'].items():
+        parts = PurePosixPath(rel)
+        if (parts.is_absolute() or '..' in parts.parts or not parts.parts
+                or str(parts) != rel or chr(92) in rel):
+            raise SystemExit('Небезопасный путь в манифесте.')
+        p = root
+        for part in parts.parts:
+            p = p / part
+            if p.is_symlink():
+                raise SystemExit('Ссылка в исходниках: ' + rel)
+        if (not p.is_file() or not isinstance(wanted, str)
+                or not re.fullmatch('[a-f0-9]{64}', wanted)
+                or hashlib.sha256(p.read_bytes()).hexdigest() != wanted):
             raise SystemExit('Повреждён файл: ' + rel)
-    for p in root.rglob('*'):
-        if p.is_file() and p.suffix == '.py':
-            ast.parse(p.read_text(), filename=str(p))
+    actual = set()
+    for parent, dirs, files in os.walk(root, followlinks=False):
+        dirs[:] = [d for d in dirs if d not in ('.git', 'dist', '__pycache__') and '.bak' not in d]
+        for name in [*dirs, *files]:
+            p = Path(parent) / name
+            if p.is_symlink():
+                raise SystemExit('Ссылка в исходниках: ' + str(p.relative_to(root)))
+        for name in files:
+            if name.endswith('.pyc') or '.bak' in name:
+                continue
+            p = Path(parent) / name
+            actual.add(p.relative_to(root).as_posix())
+            if p.suffix == '.py':
+                ast.parse(p.read_text(), filename=str(p))
+    if actual != expected:
+        raise SystemExit('Состав исходников не совпадает с манифестом: ' + ', '.join(sorted(actual ^ expected)[:8]))
     run(['bash', '-n', root / 'install.sh'])
     print('Состав, контрольные суммы и синтаксис проверены.')
 
@@ -324,13 +353,15 @@ def main():
         validate(SOURCE)
     if args.check:
         return
-    if sys.version_info < (3, 10) or platform.system() != 'Linux':
-        raise SystemExit('Нужен Linux и Python 3.10+. Рекомендуется Ubuntu 22.04/24.04.')
+    if sys.version_info < (3, 11) or platform.system() != 'Linux':
+        raise SystemExit('Нужен Linux и Python 3.11+. Рекомендуется Ubuntu 24.04 или Debian 12+.')
     if os.getuid() == 0:
         raise SystemExit('Запускай от обычного пользователя с sudo, не от root.')
     banner()
     ZoneInfo(args.timezone)
     target = args.target.expanduser().resolve()
+    if any(ord(c) < 32 or c in ('"', chr(92)) for c in str(target)):
+        raise SystemExit('Путь содержит неподдерживаемые символы.')
     path_env = f"{target}/.venv/bin:{target}/bin:{Path.home()}/.local/bin:/usr/local/bin:/usr/bin:/bin"
     env = dict(os.environ, PATH=path_env)
     if args.providers_only and args.finish_service:
@@ -346,8 +377,6 @@ def main():
         setup_providers(args, target, env)
         print('Настройка моделей завершена. Если бот уже запущен, перезапусти его службу.')
         return
-    if any(c in str(target) for c in ('\n', '"', '\\')):
-        raise SystemExit('Путь содержит неподдерживаемые символы.')
     if (target / 'config.json').exists() or (target != SOURCE and target.exists() and any(target.iterdir())):
         raise SystemExit('Папка назначения уже используется. Установка ничего не перезапишет.')
     choose_options(args)
@@ -368,7 +397,7 @@ def main():
     if not args.no_system_packages:
         run(['sudo', '-v'])
         quiet(['sudo', '-n', 'apt-get', 'update'], 'Обновление списка пакетов')
-        quiet(['sudo', '-n', 'apt-get', 'install', '-y', 'python3-venv', 'python3-pip', 'ca-certificates', 'git', 'curl', 'openssh-client', 'procps', 'iproute2', 'ffmpeg'], 'Системные зависимости')
+        quiet(['sudo', '-n', 'apt-get', 'install', '-y', f'python{sys.version_info.major}.{sys.version_info.minor}-venv', 'python3-pip', 'ca-certificates', 'git', 'curl', 'openssh-client', 'procps', 'iproute2', 'ffmpeg'], 'Системные зависимости')
     os.umask(0o077)
     if target != SOURCE:
         shutil.copytree(SOURCE, target, dirs_exist_ok=True, ignore=shutil.ignore_patterns('.git', 'dist', '__pycache__', '*.pyc', '*.bak*'))

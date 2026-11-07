@@ -15,7 +15,7 @@ if ! command -v python3 >/dev/null; then
     sudo -n apt-get update </dev/tty
     sudo -n apt-get install -y python3 ca-certificates </dev/tty
 fi
-python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else "Нужен Python 3.10+.")'
+python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else "Нужен Python 3.11+.")'
 umask 077
 nook_stage="$(mktemp -d -t nook-install.XXXXXXXX)"
 cleanup() { rm -rf -- "$nook_stage"; }
@@ -28,11 +28,19 @@ stage = Path(sys.argv[1])
 archive = stage / 'source.tar.gz'
 url = 'https://codeload.github.com/Sppqq/nook/tar.gz/refs/heads/main'
 with urllib.request.urlopen(url, timeout=120) as response, archive.open('wb') as output:
-    shutil.copyfileobj(response, output)
+    size = 0
+    while chunk := response.read(65536):
+        size += len(chunk)
+        if size > 10 * 1024 * 1024:
+            raise SystemExit('Архив исходников слишком большой.')
+        output.write(chunk)
 root = stage / 'source'
 root.mkdir()
+total, seen = 0, set()
 with tarfile.open(archive) as source:
-    for member in source:
+    for count, member in enumerate(source):
+        if count >= 2000:
+            raise SystemExit('Слишком много файлов в архиве.')
         parts = PurePosixPath(member.name).parts
         if not parts or '..' in parts or member.name.startswith('/'):
             raise SystemExit('Некорректный путь в архиве.')
@@ -41,6 +49,11 @@ with tarfile.open(archive) as source:
             continue
         if not member.isfile():
             raise SystemExit('Неожиданный тип файла в архиве.')
+        name = '/'.join(rel)
+        total += member.size
+        if name in seen or member.size > 5 * 1024 * 1024 or total > 50 * 1024 * 1024:
+            raise SystemExit('Архив слишком большой или содержит повтор файла.')
+        seen.add(name)
         dest = root.joinpath(*rel)
         dest.parent.mkdir(parents=True, exist_ok=True)
         with source.extractfile(member) as data, dest.open('wb') as output:

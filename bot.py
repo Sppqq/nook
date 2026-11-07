@@ -5,6 +5,7 @@ import contextvars
 import datetime as dt
 import fcntl
 import html
+import hmac
 import json
 import logging
 import os
@@ -20,6 +21,9 @@ from base64 import b64encode
 from urllib.request import Request, urlopen
 
 import aiohttp
+
+# Private runtime files also stay private when launched outside systemd.
+os.umask(0o077)
 
 import guard
 import antigravity_limits
@@ -108,9 +112,14 @@ bot = Bot(CFG["bot_token"], default=DefaultBotProperties(link_preview_is_disable
 dp = Dispatcher()
 
 
+def private_sender(msg) -> bool:
+    return bool(msg and msg.chat.type == "private" and msg.from_user
+                and msg.chat.id == msg.from_user.id)
+
+
 def is_owner(msg: Message) -> bool:
-    return (STATE["owner_id"] is not None and msg.chat.type == "private"
-            and msg.from_user and msg.from_user.id == STATE["owner_id"])
+    return (STATE["owner_id"] is not None and private_sender(msg)
+            and msg.from_user.id == STATE["owner_id"])
 
 
 # ---------------------------------------------------------------- telegram formatting
@@ -2109,13 +2118,18 @@ async def on_button(cb: CallbackQuery):
     try:
         return await handle_button(cb)
     finally:
-        if notice and STATE["owner_id"] and cb.from_user.id == STATE["owner_id"]:
+        if (notice and STATE["owner_id"] and cb.from_user.id == STATE["owner_id"]
+                and cb.message.chat.type == "private" and cb.message.chat.id == cb.from_user.id):
             trash(cb.message.chat.id, cb.message.message_id, 1)
             for extra in STATE.get("msg_groups", {}).get(str(cb.message.message_id), []):
                 trash(cb.message.chat.id, extra, 1)
 
 
 async def handle_button(cb: CallbackQuery):
+    # Forwarded/group/inline buttons must never send private admin data there.
+    if (not cb.message or cb.message.chat.type != "private"
+            or cb.message.chat.id != cb.from_user.id):
+        return await cb.answer()
     if STATE["owner_id"] and cb.from_user.id != STATE["owner_id"] and is_guest(cb.from_user.id):
         return await guest_button(cb)
     if not STATE["owner_id"] or cb.from_user.id != STATE["owner_id"]:
@@ -2615,7 +2629,11 @@ async def cmd_start2(msg: Message):
 @dp.message(Command("start", "menu"))
 async def cmd_start(msg: Message, command: CommandObject):
     if STATE["owner_id"] is None:
-        if (command.args or "").strip() != CFG.get("pair_code"):
+        if not private_sender(msg):
+            return
+        pair_code = CFG.get("pair_code")
+        if (not isinstance(pair_code, str) or not pair_code
+                or not hmac.compare_digest((command.args or "").strip().encode(), pair_code.encode())):
             return await msg.answer("Привет. Я живу на одном сервере и слушаюсь только хозяина. "
                                     "Пришли /start <код привязки>.")
         STATE["owner_id"] = msg.from_user.id
@@ -2647,7 +2665,7 @@ async def cmd_graph(msg: Message):
     if is_owner(msg):
         await delete_msgs(msg.chat.id, [msg.message_id])
         await send_graph(msg.chat.id)
-    elif msg.from_user and is_guest(msg.from_user.id):
+    elif private_sender(msg) and is_guest(msg.from_user.id):
         await send_graph(msg.chat.id, prefix="gg")
 
 

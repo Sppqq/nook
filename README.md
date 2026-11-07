@@ -74,7 +74,7 @@ Open **More → Mods → Обновить Nook** to check GitHub and confirm an 
 
 ## Install
 
-Use an interactive SSH terminal on Ubuntu 22.04/24.04 or an apt-based Debian system, with Python 3.10+, systemd, and a regular user who can use sudo. Other distributions and containers without user systemd need manual setup. Allow approximately 2 GB RAM for charts and optional voice recognition; actual usage depends on your workload.
+Use an interactive SSH terminal on Ubuntu 24.04 or Debian 12+ (Ubuntu 22.04 needs a separately installed Python 3.11+), with Python 3.11+, systemd, and a regular user who can use sudo. Other distributions and containers without user systemd need manual setup. Allow approximately 2 GB RAM for charts and optional voice recognition; actual usage depends on your workload.
 
 Install with one command from an interactive SSH terminal:
 
@@ -179,3 +179,5 @@ See [Architecture](docs/ARCHITECTURE.md), [Contributing](CONTRIBUTING.md), and [
 ## License
 
 [MIT](LICENSE). External libraries and provider tools retain their own licenses and service terms. Nook is an independent project and is not affiliated with Telegram or its model providers.
+
+Security review: [2026-11-07 findings and fixes](docs/SECURITY-AUDIT.md).

@@ -13,7 +13,7 @@ Nook is an autonomous server administration assistant, intended for the owner of
 
 ## Privileged operations
 
-The root helper is optional and installed separately. Its sudoers policy allows specified maintenance commands without a password. Other root requests are sent to Telegram for approval; temporary full-access mode bypasses individual approvals.
+The root helper is optional and installed separately. Treat installation of this helper as granting the bot account **full root access**. Its sudoers policy allows specified maintenance commands without a password; the account also controls the approval spool. Other root requests are sent to Telegram for approval; temporary full-access mode bypasses individual approvals.
 
 The request spool is controlled by the bot's Linux user. This approval flow is not a security boundary against an attacker who has already compromised that account. Avoid installing the helper unless you understand and accept that trust model.
 
@@ -31,4 +31,4 @@ The optional source updater trusts this GitHub repository over HTTPS and validat
 
 Do not disclose credentials or exploitable details in a public issue. If GitHub's **Report a vulnerability** option is available in this repository's Security tab, use it. Otherwise, open a minimal issue requesting a private reporting channel without publishing the exploit or sensitive data. A dedicated private reporting address has not yet been configured.
 
-This early preview has not had an independent security audit.
+The maintainer performed a source and dependency review on 2026-11-07: [findings, fixes and limits](docs/SECURITY-AUDIT.md). This early preview has not had an independent security audit.

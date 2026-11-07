@@ -59,6 +59,8 @@ def setup(m):
         with os.fdopen(fd, 'w') as f:
             f.write(secrets.token_urlsafe(48))
     token = token_path.read_text().strip()
+    if not re.fullmatch(r'[A-Za-z0-9_-]{32,128}', token):
+        raise ValueError('Invalid owner API token file; API not started')
     arrivals = []
 
     @web.middleware

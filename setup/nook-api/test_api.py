@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from aiohttp import ClientSession
 
-spec = importlib.util.spec_from_file_location('owner_api', '__NOOK_USER_HOME__/nook/mods/owner_api.py')
+spec = importlib.util.spec_from_file_location('owner_api', Path(__file__).resolve().parents[2] / 'mods/owner_api.py')
 mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mod)
 

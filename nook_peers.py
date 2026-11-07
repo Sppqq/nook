@@ -50,6 +50,7 @@ class Peers:
     def db(self):
         conn = sqlite3.connect(self.root / 'messages.sqlite', timeout=10)
         conn.row_factory = sqlite3.Row
+        (self.root / 'messages.sqlite').chmod(0o600)
         conn.execute('CREATE TABLE IF NOT EXISTS messages ('
                      'id TEXT PRIMARY KEY, peer TEXT, body TEXT, received REAL, '
                      'handled INTEGER DEFAULT 0, notified INTEGER DEFAULT 0)')
@@ -92,7 +93,9 @@ class Peers:
         peer = self.config['peers'][body['channel']]
         if not hmac.compare_digest(self.signature(body, peer['key']), envelope['signature']):
             raise ValueError('Неверная подпись.')
-        if body.get('version') != 1 or abs(time.time() - body['timestamp']) > 600:
+        if (type(body.get('version')) is not int or body['version'] != 1
+                or type(body.get('timestamp')) is not int
+                or abs(time.time() - body['timestamp']) > 600):
             raise ValueError('Устаревшее сообщение или версия.')
         if not re.fullmatch(r'[a-f0-9]{32}', body['id']):
             raise ValueError('Неверный ID.')
@@ -101,6 +104,8 @@ class Peers:
         if body.get('reply_to') is not None and not re.fullmatch(r'[a-f0-9]{32}', body['reply_to']):
             raise ValueError('Неверный ID ответа.')
         with self.db() as db:
+            # Serialize quota checking with insertion across receiver processes.
+            db.execute('BEGIN IMMEDIATE')
             # Limit incoming load even for an authorized peer.
             if db.execute('SELECT count(*) FROM messages WHERE peer=? AND received>?',
                           (body['channel'], time.time() - 3600)).fetchone()[0] >= 60:

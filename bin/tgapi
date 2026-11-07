@@ -11,57 +11,66 @@ import json, mimetypes, os, re, sys, uuid
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError
 
-HOME = os.environ.get("NOOK_HOME", os.path.expanduser("~/nook"))
-args = sys.argv[1:]
-if not args or args[0] in ("-h", "--help"):
-    print(__doc__); sys.exit(0)
+def main():
+    HOME = os.environ.get("NOOK_HOME", os.path.expanduser("~/nook"))
+    args = sys.argv[1:]
+    if not args or args[0] in ("-h", "--help"):
+        print(__doc__); sys.exit(0)
 
-token = json.load(open(os.path.join(HOME, "config.json")))["bot_token"]
-if args[0] == "--token-file":
-    path, _, var = args[1].partition(":")
-    raw = open(os.path.expanduser(path)).read()
-    if var:
-        m = re.search(rf"^\s*(?:export\s+)?{re.escape(var)}\s*=\s*['\"]?([^'\"\s]+)", raw, re.M)
-        if not m:
-            sys.exit(f"нет {var} в {path}")
-        token = m.group(1)
+    token = json.load(open(os.path.join(HOME, "config.json")))["bot_token"]
+    if args[0] == "--token-file":
+        path, _, var = args[1].partition(":")
+        raw = open(os.path.expanduser(path)).read()
+        if var:
+            m = re.search(rf"^\s*(?:export\s+)?{re.escape(var)}\s*=\s*['\"]?([^'\"\s]+)", raw, re.M)
+            if not m:
+                sys.exit(f"нет {var} в {path}")
+            token = m.group(1)
+        else:
+            token = raw.strip()
+        args = args[2:]
+
+    method, params, files = args[0], {}, {}
+    for a in args[1:]:
+        k, sep, v = a.partition("=")
+        if not sep:
+            sys.exit(f"ожидаю key=value: {a}")
+        if v.startswith("@") and os.path.isfile(os.path.expanduser(v[1:])):
+            files[k] = os.path.expanduser(v[1:])
+            continue
+        try:
+            params[k] = json.loads(v) if v[:1] in "{[" or v in ("true", "false") or re.fullmatch(r"-?\d+", v) else v
+        except json.JSONDecodeError:
+            params[k] = v
+
+    url = f"https://api.telegram.org/bot{token}/{method}"
+    if files:  # multipart
+        b = uuid.uuid4().hex
+        body = b""
+        for k, v in params.items():
+            v = json.dumps(v, ensure_ascii=False) if isinstance(v, (dict, list, bool)) else str(v)
+            body += f"--{b}\r\nContent-Disposition: form-data; name=\"{k}\"\r\n\r\n{v}\r\n".encode()
+        for k, path in files.items():
+            ctype = mimetypes.guess_type(path)[0] or "application/octet-stream"
+            body += (f"--{b}\r\nContent-Disposition: form-data; name=\"{k}\"; filename=\"{os.path.basename(path)}\"\r\n"
+                     f"Content-Type: {ctype}\r\n\r\n").encode() + open(path, "rb").read() + b"\r\n"
+        body += f"--{b}--\r\n".encode()
+        req = Request(url, data=body, headers={"Content-Type": f"multipart/form-data; boundary={b}"})
     else:
-        token = raw.strip()
-    args = args[2:]
-
-method, params, files = args[0], {}, {}
-for a in args[1:]:
-    k, sep, v = a.partition("=")
-    if not sep:
-        sys.exit(f"ожидаю key=value: {a}")
-    if v.startswith("@") and os.path.isfile(os.path.expanduser(v[1:])):
-        files[k] = os.path.expanduser(v[1:])
-        continue
+        req = Request(url, data=json.dumps(params).encode(), headers={"Content-Type": "application/json"})
     try:
-        params[k] = json.loads(v) if v[:1] in "{[" or v in ("true", "false") or re.fullmatch(r"-?\d+", v) else v
-    except json.JSONDecodeError:
-        params[k] = v
+        d = json.load(urlopen(req, timeout=120))
+    except HTTPError as e:
+        d = json.load(e)
+    if not d.get("ok"):
+        print(json.dumps(d, ensure_ascii=False).replace(token, "<token>"), file=sys.stderr)
+        sys.exit(1)
+    print(json.dumps(d["result"], ensure_ascii=False, indent=1).replace(token, "<token>"))
 
-url = f"https://api.telegram.org/bot{token}/{method}"
-if files:  # multipart
-    b = uuid.uuid4().hex
-    body = b""
-    for k, v in params.items():
-        v = json.dumps(v, ensure_ascii=False) if isinstance(v, (dict, list, bool)) else str(v)
-        body += f"--{b}\r\nContent-Disposition: form-data; name=\"{k}\"\r\n\r\n{v}\r\n".encode()
-    for k, path in files.items():
-        ctype = mimetypes.guess_type(path)[0] or "application/octet-stream"
-        body += (f"--{b}\r\nContent-Disposition: form-data; name=\"{k}\"; filename=\"{os.path.basename(path)}\"\r\n"
-                 f"Content-Type: {ctype}\r\n\r\n").encode() + open(path, "rb").read() + b"\r\n"
-    body += f"--{b}--\r\n".encode()
-    req = Request(url, data=body, headers={"Content-Type": f"multipart/form-data; boundary={b}"})
-else:
-    req = Request(url, data=json.dumps(params).encode(), headers={"Content-Type": "application/json"})
-try:
-    d = json.load(urlopen(req, timeout=120))
-except HTTPError as e:
-    d = json.load(e)
-if not d.get("ok"):
-    print(json.dumps(d, ensure_ascii=False).replace(token, "<token>"), file=sys.stderr)
-    sys.exit(1)
-print(json.dumps(d["result"], ensure_ascii=False, indent=1).replace(token, "<token>"))
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as exc:
+        # urllib exceptions can contain the complete token-bearing request URL.
+        sys.exit("Telegram-запрос не выполнен (" + type(exc).__name__ + "). Секреты скрыты.")
