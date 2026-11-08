@@ -77,7 +77,7 @@ class InstallerTests(unittest.TestCase):
 
 class WizardTests(unittest.TestCase):
  def args(self, **kwargs):
-  values=dict(yes=False,skip_codex=False,skip_antigravity=False,skip_mercury=False,voice=False,timezone='Europe/Moscow',no_start=True)
+  values=dict(yes=False,skip_codex=False,skip_antigravity=False,skip_mercury=False,voice=False,timezone='Europe/Moscow',no_start=True,github_account='skip')
   values.update(kwargs)
   return SimpleNamespace(**values)
  def test_presets_invalid_retry_and_voice(self):
@@ -89,11 +89,19 @@ class WizardTests(unittest.TestCase):
   args=self.args(skip_antigravity=True,skip_mercury=True)
   with patch.object(m.sys.stdin,'isatty',return_value=True),patch('builtins.input',return_value='n') as prompt:
    m.choose_options(args)
-  self.assertEqual(prompt.call_count,1);self.assertFalse(args.skip_codex)
+   self.assertEqual(prompt.call_count,1);self.assertFalse(args.skip_codex)
  def test_cancel_plan_and_no_empty_provider_set(self):
   with patch.object(m.sys.stdin,'isatty',return_value=True),patch('builtins.input',return_value='n'),contextlib.redirect_stdout(io.StringIO()):
    with self.assertRaises(SystemExit):m.confirm_plan(self.args(),Path('/tmp/nook'))
   with self.assertRaises(SystemExit):m.confirm_plan(self.args(skip_codex=True,skip_antigravity=True,skip_mercury=True),Path('/tmp/nook'))
+ def test_github_choice_and_explicit_flag(self):
+  args=self.args(voice=True,skip_mercury=True,github_account=None)
+  with patch.object(m.sys.stdin,'isatty',return_value=True),patch('builtins.input',side_effect=['bad','2']),contextlib.redirect_stdout(io.StringIO()):
+   m.choose_options(args)
+  self.assertEqual(args.github_account,'agent')
+  with patch.object(m.sys.stdin,'isatty',return_value=True),patch('builtins.input') as prompt:
+   m.choose_options(args)
+  prompt.assert_not_called()
 
 if __name__ == "__main__":
  unittest.main()

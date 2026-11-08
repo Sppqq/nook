@@ -1,6 +1,7 @@
 # Local runtime data; only templates/runtime contains distributable seeds.
 /config.json
 /secrets.env
+/.github-*
 /state.json
 /nodes.json
 /ssh_config

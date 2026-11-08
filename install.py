@@ -56,6 +56,14 @@ def choose_options(args):
         args.skip_mercury = choice not in ('3', '4')
     if not args.voice:
         args.voice = input('  Добавить локальное распознавание голосовых? [y/N]: ').strip().lower() in ('y', 'yes', 'д', 'да')
+    if getattr(args, 'github_account', None) is None:
+        print('  GitHub: 1 — аккаунт хозяина; 2 — отдельный аккаунт агента; 3 — подключить позже')
+        while True:
+            choice = input('  GitHub [1–3, Enter = 3]: ').strip() or '3'
+            if choice in ('1', '2', '3'):
+                args.github_account = {'1': 'owner', '2': 'agent', '3': 'skip'}[choice]
+                break
+            print('  Введи число от 1 до 3.')
 
 
 def confirm_plan(args, target):
@@ -68,6 +76,8 @@ def confirm_plan(args, target):
     print('  Модели    ' + ' · '.join(providers))
     print('  Часовой пояс  ' + args.timezone)
     print('  Голосовые ' + ('да' if args.voice else 'нет'))
+    print('  GitHub    ' + {'owner': 'аккаунт хозяина', 'agent': 'отдельный аккаунт агента',
+                             'skip': 'подключить позже'}[getattr(args, 'github_account', None) or 'skip'])
     print('  Автозапуск ' + ('подготовить без запуска' if args.no_start else 'systemd, запуск после установки'))
     if sys.stdin.isatty() and not args.yes:
         if input('  Всё верно, установить? [Y/n]: ').strip().lower() not in ('', 'y', 'yes', 'д', 'да'):
@@ -342,6 +352,10 @@ def main():
     ap.add_argument('--skip-antigravity', action='store_true')
     ap.add_argument('--skip-mercury', action='store_true')
     ap.add_argument('--mercury-key-file', type=Path)
+    ap.add_argument('--github-account', choices=['owner', 'agent', 'skip'])
+    ap.add_argument('--github-token-file', type=Path, help='Файл с GitHub PAT; не передавай сам токен в командной строке')
+    ap.add_argument('--github-login', help='Ожидаемый логин владельца GitHub PAT')
+    ap.add_argument('--github-only', action='store_true', help='Подключить или сменить GitHub в установленной копии')
     ap.add_argument('--finish-service', action='store_true', help='Создать службу после прерванной установки')
     ap.add_argument('--providers-only', action='store_true', help='Настроить модели в уже установленном боте')
     ap.add_argument('--voice', action='store_true')
@@ -349,7 +363,7 @@ def main():
     ap.add_argument('--owner-id', type=int)
     ap.add_argument('--token-file', type=Path)
     args = ap.parse_args()
-    if args.check or not (args.providers_only or args.finish_service):
+    if args.check or not (args.providers_only or args.finish_service or args.github_only):
         validate(SOURCE)
     if args.check:
         return
@@ -364,8 +378,16 @@ def main():
         raise SystemExit('Путь содержит неподдерживаемые символы.')
     path_env = f"{target}/.venv/bin:{target}/bin:{Path.home()}/.local/bin:/usr/local/bin:/usr/bin:/bin"
     env = dict(os.environ, PATH=path_env)
-    if args.providers_only and args.finish_service:
-        raise SystemExit('Выбери один режим: --providers-only или --finish-service.')
+    if sum((args.providers_only, args.finish_service, args.github_only)) > 1:
+        raise SystemExit('Выбери один режим: --providers-only, --finish-service или --github-only.')
+    if args.github_token_file and args.github_account not in ('owner', 'agent'):
+        raise SystemExit('Для --github-token-file укажи --github-account owner или agent.')
+    if args.github_only:
+        if not (target / 'config.json').is_file():
+            raise SystemExit('Сначала установи бота; --github-only требует существующий config.json.')
+        from tools.github_setup import setup_github
+        setup_github(target, args.github_account, args.github_token_file, args.github_login)
+        return
     if args.finish_service:
         if not (target / 'config.json').is_file() or not (target / '.venv/bin/python').is_file():
             raise SystemExit('Сначала установи бота и Python-окружение.')
@@ -423,6 +445,8 @@ def main():
     if args.voice:
         quiet([python, '-m', 'pip', 'install', '-r', target / 'requirements-voice.txt'], 'Распознавание голосовых')
     setup_providers(args, target, env)
+    from tools.github_setup import setup_github
+    setup_github(target, args.github_account or 'skip', args.github_token_file, args.github_login)
     setup_service(target, args.timezone, args.no_start, path_env)
 
 if __name__ == '__main__':

@@ -29,6 +29,7 @@ For example: “Connect my copies so they can exchange messages” became the [p
 - Manage your other servers over SSH and schedule reminders or maintenance tasks.
 - Customize answer buttons, the main menu, icons, premium emoji, colors, and button layout. Choose a minimal, standard, or full layout.
 - Add trusted Python mods, agent skills, and separately configured integrations.
+- Choose your GitHub account or a separate agent account during setup, with private token storage and a separate Git identity.
 - Optionally use a root helper that requests approval through Telegram.
 
 Nook is an autonomous administrative tool. It runs commands with the Linux user's permissions. Agent instructions are not a sandbox, and its monitoring does not replace backups. Read [SECURITY.md](SECURITY.md) before granting it access.
@@ -65,6 +66,8 @@ Sources: [OpenClaw official quick-start FAQ](https://docs.openclaw.ai/help/faq-f
 We have not run all three projects under the same workload. The process snapshot cannot be compared directly with machine RAM requirements, and it does not establish that Nook uses less total memory or CPU. Browser automation, local models, voice recognition, and concurrent tasks can substantially increase usage. No comparable CPU or peak-memory measurements are available yet.
 
 ## Connected assistants
+
+[GitHub setup](docs/GITHUB.md): use your account, a separate agent account, or connect later. The wizard verifies the token's account; `bin/github-git` uses that identity without changing global Git settings. Separate accounts must be registered by a human. Already installed? Run `python3 install.py --github-only` from your updated source folder.
 
 [Pair your Nook copies](docs/PEERS.md) over existing SSH access to exchange signed messages. Optional Mercury replies use no tools or server data. Open **More → Mods → Связь с копиями** in Telegram, or ask your assistant to connect a copy.
 
