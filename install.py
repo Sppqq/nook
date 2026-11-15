@@ -36,6 +36,21 @@ def banner():
 def section(number, title):
     print(paint('\n  [' + str(number) + '/7] ' + title, '1;36'), flush=True)
 
+def accept_terms(args):
+    """Require explicit acceptance before changing the target or installing packages."""
+    print((SOURCE / 'TERMS.md').read_text())
+    if args.accept_terms:
+        print('  Условия приняты явно: --accept-terms.\n')
+        return
+    if not sys.stdin.isatty():
+        raise SystemExit('Для установки требуется согласие с TERMS.md: прочитай условия и передай --accept-terms. --yes не заменяет согласие.')
+    try:
+        answer = input('  Принимаешь условия? Введи ПРИНИМАЮ или I ACCEPT: ').strip().casefold()
+    except (EOFError, KeyboardInterrupt):
+        raise SystemExit('Условия не приняты. Установка отменена.') from None
+    if answer not in ('принимаю', 'i accept'):
+        raise SystemExit('Условия не приняты. Установка отменена.')
+
 def choose_options(args):
     """Keep explicit CLI flags; offer presets during a normal interactive install."""
     if not sys.stdin.isatty() or args.yes:
@@ -345,6 +360,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--check', action='store_true')
     ap.add_argument('--yes', action='store_true', help='Пропустить выбор набора и подтверждение плана')
+    ap.add_argument('--accept-terms', action='store_true', help='Явно принять TERMS.md; --yes не заменяет согласие')
     ap.add_argument('--target', type=Path, default=Path.home() / 'nook')
     ap.add_argument('--no-start', action='store_true')
     ap.add_argument('--no-system-packages', action='store_true')
@@ -401,6 +417,7 @@ def main():
         return
     if (target / 'config.json').exists() or (target != SOURCE and target.exists() and any(target.iterdir())):
         raise SystemExit('Папка назначения уже используется. Установка ничего не перезапишет.')
+    accept_terms(args)
     choose_options(args)
     confirm_plan(args, target)
     section(1, 'Знакомство · Telegram')

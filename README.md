@@ -12,6 +12,8 @@ Nook is a self-hosted Telegram assistant that helps you look after a Linux serve
 
 Changes in this release: [changelog](docs/CHANGELOG.md).
 
+> **Use at your own risk.** Nook can execute commands and delete or damage data. The authors and maintainers, including Sppqq and work published through Domovoy/Nook or nook-agent, provide no warranties and disclaim liability to the extent permitted by law. Read the [terms of use](TERMS.md) before installation. Installing or using Nook indicates acceptance; the installer requires explicit confirmation. For unattended installation, use `--accept-terms`; `--yes` alone does not accept the terms. Keep independent backups.
+
 ## The main advantage: ask it to improve itself
 
 **Describe a capability in chat, and Nook can implement it in its own installation.** Add a menu button, connect a service, write a skill, or build a background task without doing the implementation yourself. The assistant can inspect its source, write a Python mod, check it, and load supported mods without restarting the bot. Larger changes can also involve the core, with backups, validation, and a restart when needed.

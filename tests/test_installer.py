@@ -14,6 +14,17 @@ class InstallerTests(unittest.TestCase):
   self.home_patch=patch.dict(os.environ,{'HOME':str(self.home)});self.home_patch.start();self.addCleanup(self.home_patch.stop)
   self.out=io.StringIO();self.redirect=contextlib.redirect_stdout(self.out);self.redirect.__enter__();self.addCleanup(self.redirect.__exit__,None,None,None)
  def response(self,value):return io.BytesIO(json.dumps(value).encode())
+ def test_terms_explicit_flag_and_yes_does_not_accept(self):
+  with patch.object(m.sys.stdin,'isatty',return_value=False):
+   m.accept_terms(SimpleNamespace(accept_terms=True,yes=True))
+   with self.assertRaises(SystemExit):m.accept_terms(SimpleNamespace(accept_terms=False,yes=True))
+ def test_terms_require_explicit_words(self):
+  with patch.object(m.sys.stdin,'isatty',return_value=True):
+   for answer in ('', 'yes', 'нет'):
+    with patch('builtins.input',return_value=answer),self.assertRaises(SystemExit):
+     m.accept_terms(SimpleNamespace(accept_terms=False))
+   for answer in ('ПРИНИМАЮ', 'I ACCEPT'):
+    with patch('builtins.input',return_value=answer):m.accept_terms(SimpleNamespace(accept_terms=False))
  def test_mercury_verified_secret_permissions(self):
   self.target.mkdir();(self.target/'secrets.env').write_text('OTHER=value\nINCEPTION_API_KEY=old\n')
   key='test-friend-mercury-secret'
@@ -50,7 +61,7 @@ class InstallerTests(unittest.TestCase):
    calls.append([str(a) for a in args])
    if len(args)>2 and args[1:3]==['-m','venv']:
     py=Path(args[3])/'bin/python';py.parent.mkdir(parents=True);py.write_text('mock-python')
-  argv=['install.py','--target',str(self.target),'--no-system-packages','--no-start','--owner-id','123456','--token-file',str(tokenfile)]
+  argv=['install.py','--accept-terms','--target',str(self.target),'--no-system-packages','--no-start','--owner-id','123456','--token-file',str(tokenfile)]
   with patch.object(m.os,'getuid',return_value=1001),patch.object(m.getpass,'getuser',return_value='friend'),patch.object(m,'run',side_effect=fake_run),patch.object(m,'setup_providers') as providers,patch.object(sys,'argv',argv):
    m.main();providers.assert_called_once()
    cfg=(self.target/'config.json').read_bytes();self.assertEqual(json.loads(cfg)['owner_id'],123456)
