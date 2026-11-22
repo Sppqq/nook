@@ -29,7 +29,7 @@ class AccountTests(unittest.IsolatedAsyncioTestCase):
             return {}
         self.mod.cli=cli
         self.core={'CODEX_LOGIN_LOCK':asyncio.Lock(),'user_lane':SimpleNamespace(current=None),'bg_lane':SimpleNamespace(current=None),
-                   'LIMITS_CACHE':{'data':1,'at':1},'save_state':lambda:None}
+                   'LIMITS_CACHE':{'data':1,'at':1},'save_state':lambda:None, 'win_name':lambda n:f'{n} min'}
         exec('async def login(chat): pass',self.core)
         test=self
         class Mod:
@@ -74,3 +74,16 @@ class AccountTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.gather(*self.m.tasks)
         self.assertEqual(self.m.core.state['main_thread'],'agy-keep')
         self.assertTrue(any(c[0]=='import' for c in self.calls))
+
+    async def test_quota_screen_fetches_account_usage_explicitly(self):
+        self.stored[0]['usage'] = {
+            'source': 'api', 'refresh': {'status': 'ok'},
+            'primary': {'used_percent': 42, 'window_minutes': 300},
+        }
+        messages = []
+        async def reply(text):
+            messages.append(text)
+        self.ctx.reply = reply
+        await self.m.handlers['limits'](self.ctx)
+        self.assertIn(('list', '--api', '--json'), self.calls)
+        self.assertIn('300 min: **42%**', messages[0])

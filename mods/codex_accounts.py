@@ -1,5 +1,6 @@
 """Выбор сохранённых аккаунтов Codex и вход в новый."""
 import asyncio
+from datetime import datetime
 import hashlib
 import json
 import os
@@ -31,6 +32,30 @@ async def accounts():
     return (await cli('list', '--skip-api', '--json')).get('accounts', [])
 
 
+def format_account_limits(stored, window_name, refreshed):
+    lines = ['**Лимиты аккаунтов Codex**', 'Проценты показывают расход. Время сброса указано в часовом поясе сервера.']
+    for account in stored:
+        name = account.get('alias') or account.get('email') or f"Аккаунт {account['number']}"
+        name = ' '.join(name.replace('`', '').split())[:100]
+        badge = '✅ ' if account.get('active') else ''
+        lines.append(f"\n{badge}`{name}`")
+        usage = account.get('usage') or {}
+        refresh = usage.get('refresh') or {}
+        fresh = refreshed and usage.get('source') == 'api' and refresh.get('status') == 'ok'
+        if not fresh:
+            lines.append('⚠️ Показаны сохранённые данные, если они есть.')
+        windows = [usage[key] for key in ('primary', 'secondary') if usage.get(key)]
+        for window in windows:
+            reset = window.get('resets_at')
+            when = datetime.fromtimestamp(reset).astimezone().strftime('%d.%m %H:%M %Z') if reset else 'неизвестно'
+            lines.append(f"{window_name(window['window_minutes'])}: **{window['used_percent']:.0f}%** · сброс {when}")
+        if not windows:
+            lines.append('Нет данных о лимитах.')
+    if not stored:
+        lines.append('\nСохранённых аккаунтов пока нет.')
+    return '\n'.join(lines)
+
+
 def setup(m):
     lock = asyncio.Lock()
     # Core exports its login handler; use that handler's lock/state persistence
@@ -51,6 +76,8 @@ def setup(m):
             name = a.get('alias') or a.get('email') or f"Аккаунт {a['number']}"
             label = ('✅ ' if a.get('active') else '') + name[:46]
             rows.append([m.btn(label, 'select', account_id(a))])
+        if stored:
+            rows.append([m.btn('Лимиты всех аккаунтов', 'limits')])
         rows.append([m.btn('Войти в новый аккаунт', 'login')])
         rows.append([m.btn('Закрыть', 'close')])
         text = 'Выбери аккаунт Codex. ✅ — текущий. Основная модель бота при этом не меняется.' if stored else 'Сохранённых аккаунтов пока нет.'
@@ -59,6 +86,24 @@ def setup(m):
     @m.button('Сменить аккаунт Codex', icon='refresh', where='menu')
     async def switch(ctx):
         await show(ctx)
+
+    @m.callback('limits')
+    async def limits(ctx):
+        login_lock = core['CODEX_LOGIN_LOCK']
+        if login_lock.locked():
+            return await ctx.toast('Дождись завершения входа или смены аккаунта.')
+        async with login_lock:
+            await ctx.toast('Проверяю лимиты…')
+            refreshed = True
+            try:
+                stored = (await cli('list', '--api', '--json')).get('accounts', [])
+            except (OSError, RuntimeError, ValueError, asyncio.TimeoutError):
+                refreshed = False
+                try:
+                    stored = await accounts()
+                except (OSError, RuntimeError, ValueError, asyncio.TimeoutError):
+                    return await ctx.reply('Не удалось прочитать лимиты аккаунтов Codex.')
+        await ctx.reply(format_account_limits(stored, core['win_name'], refreshed))
 
     @m.callback('select')
     async def select(ctx):

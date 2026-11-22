@@ -19,7 +19,12 @@ ROOT = Path(__file__).resolve().parents[1]
 def functions(names, **values):
     ns = dict(globals(), **values)
     tree = ast.parse((ROOT / 'bot.py').read_text())
-    nodes = [n for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name in names]
+    nodes = [
+        node for node in tree.body
+        if (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in names)
+        or (isinstance(node, ast.Assign)
+            and any(isinstance(target, ast.Name) and target.id in names for target in node.targets))
+    ]
     exec(compile(ast.Module(body=nodes, type_ignores=[]), '<provider-functions>', 'exec'), ns)
     return ns
 
@@ -35,6 +40,9 @@ import json,sys,time
 from pathlib import Path
 args=sys.argv[1:]
 prompt=args[args.index('-p')+1]
+if prompt == 'model':
+    print(json.dumps({'event':'result','result':{'status':'SUCCESS','response':args[args.index('--model')+1]}}))
+    sys.exit(0)
 if prompt == 'hang': time.sleep(60)
 if prompt == 'overload':
     Path(args[args.index('--log-file')+1]).write_text('No capacity available for model gemini-example-high')
@@ -48,9 +56,21 @@ print(json.dumps({'event':'result','result':{'status':'SUCCESS','response':'resu
         cli.chmod(0o700)
         self.state = {}
         self.run = SimpleNamespace(proc=None, cancelled=False)
-        self.ns = functions({'antigravity_result','antigravity_capacity_error','wait_antigravity','run_antigravity','_stream_antigravity'},
+        self.ns = functions({'antigravity_result','antigravity_capacity_error','wait_antigravity','run_antigravity','_stream_antigravity',
+                             'MODELS', 'ANTIGRAVITY_CLI_MODELS'},
+            MERCURY_MODEL='mercury-3',
             Run=lambda:self.run, USER_TIMEOUT=5, CFG={'model':'antigravity-flash38','effort':'high'}, STATE=self.state,
             RUN_THREADS={}, AGY_BIN=str(cli), HOME=str(self.home), codex_env=lambda *a:os.environ.copy(), save_state=lambda:None, log=logging.getLogger('test'))
+
+    async def test_hydrogen_effort_and_carbon_default(self):
+        for model, effort, expected in (
+            ('antigravity-hydrogen', 'xhigh', 'gemini-4-hydrogen-xhigh'),
+            ('antigravity-carbon', 'xhigh', 'gemini-4-carbon-high'),
+            ('antigravity', 'medium', 'gemini-4-argon-medium'),
+        ):
+            self.ns['CFG'].update(model=model, effort=effort)
+            _, text, err = await self.ns['run_antigravity']('model')
+            self.assertEqual((text, err), (expected, None))
 
     async def test_resume_progress_usage_and_run_cleanup(self):
         steps=[]
@@ -116,6 +136,12 @@ class RoutingTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(calls[0][1],expected,(source,target))
 
 class KeyboardTests(unittest.TestCase):
+    def test_close_button_does_not_turn_menu_into_notification(self):
+        ns = functions({'is_notice', 'is_view_msg'}, STATE={'view_msgs': [1]})
+        markup = SimpleNamespace(inline_keyboard=[[SimpleNamespace(callback_data='close')]])
+        self.assertFalse(ns['is_notice'](SimpleNamespace(message_id=1, reply_markup=markup)))
+        self.assertTrue(ns['is_notice'](SimpleNamespace(message_id=2, reply_markup=markup)))
+
     def test_continue_only_for_step_limit(self):
         ns=functions({'result_kb'},MERCURY_STEPS=30,multi_questions=lambda _:[],yes_no_question=lambda _:False,btn=lambda text,action,*a:action,
             kb=lambda *rows:rows,custom_keyboard=lambda markup,*a:markup)

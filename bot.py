@@ -514,6 +514,7 @@ class Run:
         self.proc = None
         self.cancelled = False
         self.started = time.time()
+        self.antigravity_model = None
 
     def cancel(self):
         self.cancelled = True
@@ -698,7 +699,13 @@ async def run_codex(prompt, thread_id=None, images=(), on_step=None, run: Run = 
 MERCURY_URL = "https://api.inceptionlabs.ai/v1/chat/completions"
 MERCURY_MODEL = "mercury-3"
 ANTIGRAVITY_MODEL = "antigravity-argon"
-ANTIGRAVITY_MODELS = ("antigravity", "antigravity-argon", "antigravity-flash38")
+ANTIGRAVITY_CLI_MODELS = {
+    "antigravity-argon": "gemini-4-argon",
+    "antigravity-carbon": "gemini-4-carbon",
+    "antigravity-hydrogen": "gemini-4-hydrogen",
+    "antigravity-flash38": "gemini-3.8-flash",
+}
+ANTIGRAVITY_MODELS = ("antigravity", *ANTIGRAVITY_CLI_MODELS)
 def is_antigravity_model(m):
     return m in ANTIGRAVITY_MODELS
 AGY_BIN = os.path.expanduser("~/.local/bin/agy")
@@ -952,10 +959,14 @@ async def run_antigravity(prompt, thread_id=None, images=(), on_step=None, run: 
     if images:
         prompt += "\n\n[хозяин прислал картинку, но CLI-модель картинки не видит — скажи ему об этом, если важно]"
     run = run or Run()
-    eff = CFG.get("effort") or "medium"
-    if eff not in ("low", "medium", "high"):
-        eff = "medium"
-    mid = f"gemini-3.8-flash-{eff}" if CFG.get("model") == "antigravity-flash38" else f"gemini-4-argon-{eff}"
+    model = CFG.get("model")
+    run.antigravity_model = model
+    _, efforts, default_effort = MODELS.get(model, MODELS["antigravity-argon"])
+    effort = CFG.get("effort")
+    if effort not in efforts:
+        effort = default_effort
+    cli_model = ANTIGRAVITY_CLI_MODELS.get(model, ANTIGRAVITY_CLI_MODELS["antigravity-argon"])
+    mid = f"{cli_model}-{effort}"
     # Доверенный агент хозяина работает без интерактивного терминала, как Codex.
     # Системные права при этом по-прежнему ограничены пользователем ОС/rootdo.
     conversations = STATE.setdefault("agy_threads", {})
@@ -1007,6 +1018,8 @@ async def _stream_antigravity(cmd, tid, conversations, run_id, run, on_step, tim
                     await on_step(mark + "Gemini: " + str(step.get("tool_name") or "инструмент")[:80])
 
         async def collect():
+            if on_step:
+                await on_step("▸ Gemini: выполняет запрос")
             _, diagnostic = await asyncio.gather(read_output(), proc.stderr.read())
             await proc.wait()
             return b"", diagnostic
@@ -1218,10 +1231,15 @@ def fmt_limits(L):
     return "\n".join(lines)
 
 
-async def limits_note(engine=None):
+async def limits_note(engine=None, antigravity_model=None):
+    """Строчка про лимиты под ответом — только когда их осталось мало."""
+    if antigravity_model:
+        rows = await antigravity_quota_rows(antigravity_model)
+        if any(row["used"] >= 70 for row in rows):
+            return f"\n\n*{E('limits')} лимит Antigravity: {antigravity_limits.format_short(rows)}*"
+        return ""
     if engine is not None and engine != "codex":
         return ""
-    """Строчка про лимиты под ответом — только когда их осталось мало."""
     try:
         L = await get_limits()
     except Exception:
@@ -1429,7 +1447,7 @@ async def run_task(lane: Lane, prompt, *, thread_id=None, images=(), title=E("bu
         text = header + (final or "")
         if err:
             text += f"\n\n{E('err')} {err}"
-        text += await limits_note(engine)
+        text += await limits_note(engine, run.antigravity_model)
         markup = result_kb(final, incident, err, fav=bool(task), mercury=is_mercury_thread(tid)) if tid else kb(back())
         if background or run.cancelled:
             markup = with_close(markup)
@@ -1610,10 +1628,23 @@ def jobs_list():
     return sorted(load_json(JOBS, []), key=lambda j: j["at"])
 
 
+async def antigravity_quota_rows(model):
+    cli_model = ANTIGRAVITY_CLI_MODELS.get(model, ANTIGRAVITY_CLI_MODELS["antigravity-argon"])
+    return antigravity_limits.model_quota_rows(await antigravity_limits.get_limits(), cli_model)
+
+
+async def model_quota_status():
+    model, _ = current_model()
+    if is_antigravity_model(model):
+        return "Antigravity", antigravity_limits.format_short(await antigravity_quota_rows(model))
+    if model == MERCURY_MODEL or fallback_active():
+        return "", ""
+    return "Codex", limits_short(await get_limits())
+
+
 async def view_menu():
     du = shutil.disk_usage("/")
-    L = await get_limits()
-    short = limits_short(L)
+    _, short = await model_quota_status()
     text = (f"{E('home')} **Nook**\n\n{busy_line()}\n"
             f"{E('disk')} диск {du.used / du.total * 100:.0f}%  ·  "
             f"{E('eye' if STATE['watch'] else 'eyeoff')} надзор {'вкл' if STATE['watch'] else 'выкл'}"
@@ -1633,6 +1664,7 @@ async def view_menu():
         (btn("Настройки", "settings", "more"),),
         *mod_rows("menu"),
         (btn("Остановить", "stop", "stop", "danger"),) if busy else None,
+        (btn("Закрыть", "close", "cross"),),
     ), "menu")
 
 
@@ -1643,7 +1675,11 @@ async def view_status():
 async def view_limits():
     codex, agy = await asyncio.gather(
         get_limits(), antigravity_limits.get_limits(force=bool(FORCE.get())))
-    text = fmt_limits(codex) + "\n\n" + antigravity_limits.format_limits(agy, bar)
+    codex_text = fmt_limits(codex)
+    agy_text = antigravity_limits.format_limits(agy, bar)
+    model, _ = current_model()
+    parts = (agy_text, codex_text) if is_antigravity_model(model) else (codex_text, agy_text)
+    text = "\n\n".join(parts)
     return text, kb((btn("Обновить", "limits!", "refresh"),) + back())
 
 
@@ -1666,6 +1702,8 @@ MODELS = {  # из `codex app-server` model/list
     "gpt-6.1-sol": ("6.1 Sol", ["low", "medium", "high", "xhigh", "max", "ultra"], "low"),
     "mercury-3": ("Mercury 3 ⚡", ["low", "medium", "high"], "low"),  # не Codex: свой агент run_mercury
     "antigravity-argon": ("4 Argon", ["low", "medium", "high"], "medium"),
+    "antigravity-carbon": ("4 Carbon", ["low", "medium", "high"], "high"),
+    "antigravity-hydrogen": ("4 Hydrogen", ["low", "medium", "high", "xhigh"], "high"),
     "antigravity-flash38": ("3.8 Flash", ["low", "medium", "high"], "medium"),
 }
 
@@ -1706,12 +1744,25 @@ async def view_model():
             "\n\n*Effort — сколько модель думает перед ответом: выше — умнее, но дольше и быстрее съедает лимит.*\n"
             "*Mercury 3 ⚡ — очень быстрая модель Inception, не тратит лимит Codex; попроще в сложных задачах. "
             "Она же — запасная, когда лимит Codex кончается.*")
-    items = [(m, name) for m, (name, _, _) in MODELS.items()]
-    mrow = tuple(tuple(btn(("✓ " if m == model else "") + name, f"m:{m}", None, "primary" if m == model else None)
-                       for m, name in items[i:i + 3]) for i in range(0, len(items), 3))
+    groups = {"Codex": [], "Antigravity": [], "Mercury": []}
+    for model_id, (name, _, _) in MODELS.items():
+        provider = "Codex"
+        if is_antigravity_model(model_id):
+            provider = "Antigravity"
+        elif model_id == MERCURY_MODEL:
+            provider = "Mercury"
+        selected = model_id == model
+        groups[provider].append(btn(
+            ("✓ " if selected else "") + name, f"m:{model_id}", None, "primary" if selected else None,
+        ))
+    model_rows = []
+    for provider, buttons in groups.items():
+        if buttons:
+            model_rows.append((btn(provider, "model"),))
+            model_rows.extend(buttons[i:i + 3] for i in range(0, len(buttons), 3))
     erows = [tuple(btn(("✓ " if e == effort else "") + e, f"ef:{e}", None, "primary" if e == effort else None)
                    for e in efforts[i:i + 3]) for i in range(0, len(efforts), 3)]
-    return text, kb(*mrow, *erows, back("more"))
+    return text, kb(*model_rows, *erows, back("more"))
 
 
 async def view_muted():
@@ -2175,7 +2226,9 @@ KEEP_AFTER = ("mq:", "gr:", "gg:", "fav", "close", "rshow:", "wipe")
 
 
 def is_notice(msg):
-    """Уведомление = сообщение с кнопкой «Закрыть» (её ставит notify)."""
+    """Отличает временное уведомление от меню с кнопкой «Закрыть»."""
+    if is_view_msg(getattr(msg, "message_id", None)):
+        return False
     rich = getattr(msg, "rich_message", None)
     if rich:
         return bool(re.search(r"""['"]callback_data['"]:\s*['"]close['"]""", str(rich)))
@@ -4909,9 +4962,9 @@ async def quick_status():
     except Exception as e:
         lines.append(f"(мониторинг: {e})")
     try:
-        short = limits_short(await get_limits())
+        provider, short = await model_quota_status()
         if short:
-            lines.append(f"{E('robot')} Codex: {short}")
+            lines.append(f"{E('robot')} {provider}: {short}")
     except Exception:
         pass
     lines.append(f"{E('eye' if STATE['watch'] else 'eyeoff')} автонадзор: {'вкл' if STATE['watch'] else 'выкл'}"

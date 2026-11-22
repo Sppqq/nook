@@ -87,7 +87,8 @@ def fetch():
         rows = []
         for entry in group.get('buckets', []):
             window = entry.get('window')
-            row = bucket(entry, {'weekly': 'неделя', '5h': '5 ч'}.get(window, window or 'квота'))
+            label = {'weekly': 'неделя', 'week': 'неделя', '5h': '5 ч', '5-hour': '5 ч'}.get(window, window or 'квота')
+            row = bucket(entry, label)
             if row:
                 rows.append(row)
         if rows:
@@ -156,3 +157,19 @@ def format_limits(data, bar):
         age = max(0, int(time.time() - data['at']) // 60)
         lines.append(f'*(обновление недоступно; последние данные {age} мин назад)*')
     return '\n'.join(lines)
+
+
+def model_quota_rows(data, model_id):
+    if not data:
+        return []
+    for group in data.get('groups', []):
+        name = group['name']
+        if name == 'Gemini' or name == model_id or name.startswith(model_id + '-'):
+            return group['rows']
+    return []
+
+
+def format_short(rows):
+    order = {'5 ч': 0, 'неделя': 1}
+    ordered = sorted(rows, key=lambda row: order.get(row['label'], 2))
+    return ' · '.join(f"{row['label']} {row['used']:.0f}%" for row in ordered)
