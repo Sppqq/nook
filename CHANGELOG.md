@@ -13,7 +13,7 @@
 - Telegram update controls include channel/version selection, pins, changelog, pause, notification or confirmed install checks, and backup creation.
 - Fresh installation selects the newest eligible published release before downloading, with exact version pins and explicit development installation.
 - Dispatch release preparation and publication separately, with verified promotion and a protected Stable environment. Add notes, checksums and a direct-dependency SPDX SBOM.
-- Add private integrity-checked instance backups and verified out-of-place restore.
+- Add private SQLite-consistent backups, explicit provider-data opt-in, size and retention settings, optional age encryption, and verified out-of-place restore.
 
 - Conservative GitHub source updater, Telegram confirmation, local-edit conflicts, preserved runtime data, independent restart supervision and source rollback.
 

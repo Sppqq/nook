@@ -120,7 +120,7 @@ bash install.sh
 
 GitHub можно подключить или сменить позже: `python3 install.py --github-only --target "$HOME/nook"`. При установке выбор задаётся также флагом `--github-account owner|agent|skip`. Для коммитов и push через выбранный аккаунт используй `bin/github-git`, для API — `bin/github-api`. Общие настройки Git не меняются. Варианты токенов, ограничения fine-grained PAT для чужих репозиториев и права доступа описаны в [инструкции GitHub](GITHUB.md).
 
-В Telegram открой **Ещё → Моды → Обновления и резервные копии**. Локальный архив создаётся и проверяется через `bin/nook-backup create`; пробное восстановление — `bin/nook-backup restore ARCHIVE --to НОВЫЙ_КАТАЛОГ`. Архив содержит секреты и должен храниться приватно. См. [политику релизов](../RELEASE_POLICY.md) и [обновление и восстановление](UPDATES.md).
+В Telegram открой **Ещё → Моды → Обновления и резервные копии**. Для остановленного инстанса используй `bin/nook-backup create --offline`, для пробного восстановления — `bin/nook-backup restore ARCHIVE --to НОВЫЙ_КАТАЛОГ`. Внешние данные провайдеров подключаются отдельно. Доступны шифрование age и ротация проверенных копий. См. [политику релизов](../RELEASE_POLICY.md) и [обновление и восстановление](UPDATES.md).
 
 ```bash
 bash install.sh --target "$HOME/my-nook" --timezone Europe/Berlin

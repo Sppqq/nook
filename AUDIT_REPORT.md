@@ -15,6 +15,10 @@
 - Nook runtime GitHub access remains unconfigured in this clone. The desktop
   CLI reports an invalid token. Public repository reads and local Git identity
   verification succeeded independently.
+- Backups removed implicit export of external provider authorization. SQLite
+  uses a transaction-consistent snapshot. File replacement, links, and
+  destructive restore targets are refused. Offline capture is required for a
+  common consistency point across independent writers.
 
 ## Historical Stage 0 and iteration 2 baseline
 

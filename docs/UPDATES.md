@@ -42,11 +42,15 @@ bin/nook-update check
 # Подставь id из результата проверки; это явное согласие на эту версию:
 bin/nook-update request <id> --yes
 bin/nook-update status
-bin/nook-backup create
+bin/nook-backup create --offline
 bin/nook-backup verify spool/backups/nook-backup-....tar.gz
 ```
 
-`bin/nook-backup` архивирует исходники, конфигурацию, память, задания, GitHub/Mercury-настройки, SSH и локальные модификации. Он также включает только известные внешние данные провайдеров: `~/.codex/auth.json`, `~/.codex/config.toml`, JSONL-сессии Codex и OAuth-токен Antigravity. Они лежат в архиве под `provider-home/`; `.git`, `.venv`, временные каталоги и прежние архивы исключены. Архив содержит секреты и историю разговоров, остаётся локальным и создаётся с правами `0600`. Проверяй его перед копированием. Для пробного восстановления используй новый пустой путь:
+`bin/nook-backup` архивирует исходники, память, задания, настройки и локальные модификации. Из Telegram Nook резервирует очереди пользовательских и фоновых агентских задач. Копия создаётся под блокировкой обновления. SQLite копируется через штатный Backup API с учётом подтверждённых транзакций в WAL. Если другие данные меняются при чтении, копия отклоняется. Для согласованности между несколькими независимыми базами и внешними процессами останови всех писателей и используй `create --offline`.
+
+Внешние данные провайдеров включаются только с `--include-providers`. Известные файлы Codex и Antigravity попадают под `provider-home/` и восстанавливаются в новый каталог. Архив и приватные файлы остаются доступными только владельцу. Для шифрования установи `age` и используй `create --recipient PUBLIC_KEY --identity KEY_FILE`, а для проверки и восстановления передавай `--identity KEY_FILE`. Ключ держи вне инстанса и отдельно от архивов.
+
+`--max-files`, `--max-file-mib`, `--max-total-mib` и `--max-archive-mib` настраивают пределы при создании, проверке и восстановлении. `create --keep N` удаляет старые архивы того же формата только после сохранения и проверки новой копии. По умолчанию копии не удаляются. Для пробного восстановления используй новый путь:
 
 ```bash
 bin/nook-backup restore spool/backups/nook-backup-....tar.gz --to "$HOME/nook-restore-test"
@@ -80,7 +84,7 @@ The supervisor requires successful bot startup with Telegram, no failed mods, ma
 
 Automatic service updates support the installer's user `nook.service`; PM2, containers, manual launches and the original private Domovoy need separate adaptation. Older Nook installations without the updater require a reviewed initial migration. Do not establish a clean baseline from arbitrary local files to bypass conflicts; older raw manifests cannot identify all rendered files as unchanged.
 
-From the installed directory, use `bin/nook-update check`, then `bin/nook-update request <id> --yes`, and `bin/nook-update status`. `bin/nook-backup` also captures the selected Codex and Antigravity credential/session files under `provider-home/` in its archive; restore keeps them inside the new destination and never overwrites the active provider home. For manual recovery, stop `nook.service`, run `bin/nook-update rollback-offline --yes`, and start it again. `apply-offline <id> --yes` is for administrators with a stopped bot and does not perform startup health checks. Rollback refuses to overwrite edits made after the update.
+From the installed directory, use `bin/nook-update check`, then `bin/nook-update request <id> --yes`, and `bin/nook-update status`. Stop the service and external writers for an offline instance snapshot. Online backup from Telegram reserves the agent lanes, uses SQLite's Backup API, and fails if other captured files change. External provider data is opt-in via `--include-providers` and restores under `provider-home/`. Use age recipient and identity options to encrypt and verify backups, `--keep N` to rotate after verification, and the `--max-*` options to support larger instances. For manual recovery, stop `nook.service`, run `bin/nook-update rollback-offline --yes`, and start it again. `apply-offline <id> --yes` is for administrators with a stopped bot and does not perform startup health checks. Rollback refuses to overwrite edits made after the update.
 
 This is source rollback, not a guarantee that every feature works. Later failures, third-party incompatibilities, power loss or termination of the independent supervisor can require manual recovery using the persistent journal. Keep independent backups. Downloads trust GitHub and this repository's maintainers over HTTPS; the manifest is an integrity check, not an independent signature.
 

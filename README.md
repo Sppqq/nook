@@ -131,7 +131,7 @@ bash install.sh --no-system-packages              # OS packages already installe
 
 `--channel` accepts `stable`, `rc`, `beta`, `alpha` or `nightly`. Use `bash install.sh --dev` for the current checkout. The fresh installer never reconfigures an existing installation.
 
-Use Telegram **Ещё → Моды → Обновления и резервные копии** to inspect channels, releases, pins and update checks. `bin/nook-backup create` creates and verifies a local archive; `bin/nook-backup restore ARCHIVE --to NEW_DIRECTORY` verifies and restores to a new directory without replacing a live instance. Archives include local secrets and a narrow allowlist of external provider credentials/session history; they must be kept private. Provider files restore under `provider-home/` for owner-reviewed placement. See [release policy](RELEASE_POLICY.md) and [update/recovery guide](docs/UPDATES.md).
+Use Telegram **Ещё → Моды → Обновления и резервные копии** to inspect channels and create a backup. With the instance stopped, use `bin/nook-backup create --offline`. Restore to a new directory with `bin/nook-backup restore ARCHIVE --to NEW_DIRECTORY`. Backups are private, external provider credentials require explicit opt-in, and age encryption is available for off-host storage. See [release policy](RELEASE_POLICY.md) and [update/recovery guide](docs/UPDATES.md).
 
 Codex is the default preset. If you choose only another provider, the installer selects it as the initial model. Use `--yes` to keep CLI flags and skip the preset menu and plan confirmation; account logins remain interactive. Each provider requires your own account; subscriptions, quotas, or API charges may apply. For unattended key entry, `--mercury-key-file` accepts a private local file.
 

@@ -12,6 +12,12 @@
 - Checked the public GitHub state. Existing Runs returned `action_required`
   before jobs were created. Local actionlint passed. No release was published
   and no repository settings or working instance were modified.
+- Added SQLite WAL backup and restore, offline locking, optimistic mutation
+  checks for other files, owner-only restore modes, optional age encryption,
+  configurable limits and rotation after successful verification.
+- Ubuntu 24.04 passed all 11 backup tests, including a live WAL with an
+  uncommitted transaction, restoring a customized instance, and an age
+  encrypt/verify/restore round trip with a disposable key.
 
 ## Historical baseline — 2026-11-24, iteration 2
 

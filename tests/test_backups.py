@@ -1,12 +1,15 @@
 import io
 from pathlib import Path
 import shutil
+import sqlite3
+import subprocess
 import tarfile
 import tempfile
 import unittest
 from unittest.mock import patch
 
 import backup_manager as b
+from nook_update import runtime_lock
 
 
 class BackupTests(unittest.TestCase):
@@ -76,7 +79,10 @@ class BackupTests(unittest.TestCase):
         ignored = self.provider_home / '.codex/sessions/cache.tmp'
         ignored.write_text('temporary')
 
-        backup = b.create_backup(self.home)
+        default_backup = b.create_backup(self.home)
+        with tarfile.open(default_backup, 'r:gz') as archive:
+            self.assertFalse(any(name.startswith('provider-home/') for name in archive.getnames()))
+        backup = b.create_backup(self.home, include_providers=True)
         restored = b.restore_to_new_directory(backup, self.home.parent / 'restored')
         for name, content in private_files.items():
             rel = Path('provider-home') / name
@@ -91,7 +97,70 @@ class BackupTests(unittest.TestCase):
         auth.parent.mkdir()
         auth.symlink_to(external)
         with self.assertRaisesRegex(b.BackupError, 'ссылка в данных провайдера'):
-            b.create_backup(self.home)
+            b.create_backup(self.home, include_providers=True)
+
+    def test_live_wal_and_custom_instance_restore(self):
+        self.write('.agents/skills/custom/SKILL.md', 'custom tool')
+        self.write('secrets.env', 'OWNER_SETTING=private')
+        self.write('keys/id_ed25519', 'test private key')
+        database = self.home / 'memory' / 'conversation.db'
+        connection = sqlite3.connect(database)
+        self.addCleanup(connection.close)
+        connection.execute('PRAGMA journal_mode=WAL')
+        connection.execute('CREATE TABLE conversations(text)')
+        connection.execute("INSERT INTO conversations VALUES ('committed')")
+        connection.commit()
+        connection.execute("INSERT INTO conversations VALUES ('uncommitted')")
+        with runtime_lock(self.home):
+            with self.assertRaisesRegex(b.BackupError, 'уже работает'):
+                b.create_backup(self.home)
+            archive = b.create_backup(self.home, online=True)
+        destination = b.restore_to_new_directory(archive, self.home.parent / 'restored')
+        with sqlite3.connect(destination / 'memory/conversation.db') as restored:
+            self.assertEqual(restored.execute('SELECT text FROM conversations').fetchall(), [('committed',)])
+        self.assertEqual((destination / '.agents/skills/custom/SKILL.md').read_text(), 'custom tool')
+        self.assertEqual((destination / 'mods/custom.py').read_text(), 'LOCAL=True\n')
+        self.assertEqual((destination / 'memory/notes.md').read_text(), 'instance identity\n')
+        self.assertEqual((destination / 'keys/id_ed25519').stat().st_mode & 0o777, 0o600)
+        self.assertEqual((destination / 'secrets.env').read_text(), 'OWNER_SETTING=private')
+        with tarfile.open(archive, 'r:gz') as tar:
+            self.assertNotIn('memory/conversation.db-wal', tar.getnames())
+
+    def test_concurrent_file_replacement_aborts_and_keeps_last_good_copy(self):
+        first = b.create_backup(self.home, keep=1)
+        archive_file = b._archive_file
+        original = self.home / 'memory/notes.md'
+
+        def replace_after_read(*args, **kwargs):
+            record = archive_file(*args, **kwargs)
+            if args[2] == 'memory/notes.md':
+                original.rename(self.home.parent / 'old-notes')
+                original.write_text('replacement')
+            return record
+
+        with patch.object(b, '_archive_file', side_effect=replace_after_read):
+            with self.assertRaisesRegex(b.BackupError, 'изменились'):
+                b.create_backup(self.home, keep=1)
+        self.assertTrue(first.is_file())
+        self.assertEqual(b.verify_backup(first)['files'], 5)
+        second = b.create_backup(self.home, keep=1)
+        self.assertTrue(second.is_file())
+        self.assertFalse(first.exists())
+
+    @unittest.skipUnless(shutil.which('age') and shutil.which('age-keygen'), 'age is optional')
+    def test_age_archive_requires_identity_and_enforces_limits(self):
+        identity = self.home.parent / 'age-key'
+        subprocess.run(['age-keygen', '-o', str(identity)], check=True, capture_output=True)
+        recipient = subprocess.check_output(['age-keygen', '-y', identity], text=True).strip()
+        archive = b.create_backup(self.home, recipient=recipient, identity=identity)
+        self.assertTrue(archive.name.endswith('.tar.gz.age'))
+        with self.assertRaisesRegex(b.BackupError, 'age-ключ'):
+            b.verify_backup(archive)
+        self.assertEqual(b.verify_backup(archive, identity=identity)['files'], 5)
+        destination = b.restore_to_new_directory(archive, self.home.parent / 'restored', identity=identity)
+        self.assertEqual((destination / 'memory/notes.md').read_text(), 'instance identity\n')
+        with self.assertRaisesRegex(b.BackupError, 'лимит'):
+            b.verify_backup(archive, limits=b.BackupLimits(archive_size=10), identity=identity)
 
     def test_corrupt_content_and_unsafe_members_are_refused(self):
         backup = b.create_backup(self.home)

@@ -12,8 +12,10 @@
 - Remaining owner setup: protect `main` and version tags, configure the
   release environments and approve a new Actions run. Existing CI runs for
   PR #7 reported `action_required`.
-- The next implementation steps are consistent backup/restore, the disposable
-  update and recovery matrix, and the remaining architecture work below.
+- Backups use SQLite snapshots, reject changed non-SQLite files, and support
+  offline capture, age encryption, retention and explicit provider opt-in.
+- The next implementation steps are the disposable update/recovery matrix and
+  the remaining architecture work below.
 
 ## Principles
 

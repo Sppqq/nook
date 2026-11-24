@@ -254,15 +254,29 @@ def setup(m):
 
     @m.command('backup', 'создать и проверить локальную резервную копию')
     async def backup_command(ctx):
-        await ctx.toast('Создаю и проверяю резервную копию…')
+        lanes = getattr(m.core, 'maintenance_lanes', ())
+        if not lanes or any(lane.current or lane.waiting or lane.lock.locked() for lane in lanes):
+            return await ctx.reply('Дождись завершения задач Nook и повтори создание резервной копии.')
+        # Reserve both agent lanes before yielding to queued agent work.
+        for lane in lanes:
+            await lane.lock.acquire()
         try:
-            path = await asyncio.to_thread(backup_manager.create_backup, home)
+            await ctx.toast('Создаю и проверяю резервную копию…')
+            task = asyncio.create_task(asyncio.to_thread(backup_manager.create_backup, home, online=True))
+            try:
+                path = await asyncio.shield(task)
+            except asyncio.CancelledError:
+                await asyncio.gather(task, return_exceptions=True)
+                raise
             report = await asyncio.to_thread(backup_manager.verify_backup, path)
             await ctx.reply(f"✅ Проверено: {report['files']} файлов, {report['bytes']} байт.\n"
                             f"Архив с секретами хранится локально в `{path.relative_to(home)}`. "
                             'Защити его правами каталога и независимой копией.')
         except backup_manager.BackupError as exc:
             await ctx.reply('Резервная копия не создана: ' + str(exc))
+        finally:
+            for lane in reversed(lanes):
+                lane.lock.release()
 
     @m.callback('backup')
     async def backup_callback(ctx):

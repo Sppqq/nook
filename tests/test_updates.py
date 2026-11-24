@@ -356,7 +356,9 @@ class UpdateTests(unittest.TestCase):
             for path in self.source.rglob('*'):
                 if path.is_file():
                     bundle.write(path, path.relative_to(self.source).as_posix())
-            bundle.writestr('NOOK_RELEASE.json', json.dumps({'version': version, 'revision': 'c' * 40}))
+            metadata = zipfile.ZipInfo('NOOK_RELEASE.json')
+            metadata.external_attr = 0o100644 << 16
+            bundle.writestr(metadata, json.dumps({'version': version, 'revision': 'c' * 40}))
         release = {'tag_name': 'v' + version, 'prerelease': True, 'draft': False,
                    'name': 'test beta', 'body': 'Test changes',
                    'assets': [{'name': 'nook-' + version + '.zip'}, {'name': 'provenance.jsonl'}]}
@@ -378,8 +380,8 @@ class UpdateTests(unittest.TestCase):
             provenance.side_effect = u.UpdateError('signature rejected')
             with self.assertRaisesRegex(u.UpdateError, 'signature rejected'):
                 u.prepare(self.home)
-            self.assertEqual(list((u.workspace(self.home) / 'staged').iterdir()),
-                             [u.workspace(self.home) / 'staged' / plan['id']])
+            self.assertEqual({path.name for path in (u.workspace(self.home) / 'staged').iterdir()},
+                             {self.stage.name, plan['id']})
         self.assertEqual(plan['version'], version)
         self.assertEqual(plan['channel'], 'beta')
         self.assertEqual(plan['revision'], 'c' * 40)
