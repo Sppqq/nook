@@ -1,5 +1,16 @@
 # Modernization log
 
+## 2026-11-24 — Iteration 4
+
+- Moved Telegram identity checks into `telegram_gateway.py` and scheduled
+  queue transitions into `job_scheduler.py`. Preserved the old JSON queue
+  format and `later` commands and added explicit unresolved-claim review.
+- Tested aiogram dispatch through installed channel callbacks and the queue
+  through concurrent workers, the real CLI and an interrupted journal commit.
+- Confirmed the two GitHub check suites still report `action_required` before
+  jobs. Added an owner runbook, and taught the installer/updater to
+  distinguish an outdated GitHub CLI without relaxing provenance checks.
+
 ## 2026-11-24 — Iteration 3
 
 - Restored the exact PR #7 base. The attached 108-file source archive

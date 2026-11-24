@@ -2,6 +2,14 @@
 
 ## Current findings
 
+- Iteration 4 confirmed that the PR and push took place in the same
+  repository under the same user. Both check suites failed before jobs
+  started. The public data does not justify attributing this to fork approval.
+- Scheduled work records durable claims before dispatch. Interrupted or
+  ambiguous occurrences remain for operator review. A recurring job stays
+  held until its unresolved claim is closed.
+- A real aiogram dispatch test covers owner-only channel switching, rejection
+  of group/foreign callbacks, and an empty release channel.
 - PR #7 is open against `dev` at `8e70a28`. Its two Checks runs reported
   `action_required` with no jobs in the public API. GitHub reports two
   historical releases and marks both as prereleases.

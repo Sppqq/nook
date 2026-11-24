@@ -2,6 +2,11 @@
 
 ## Current work
 
+- Iteration 4 extracts Telegram identity checks and durable scheduled-job
+  storage. Actual aiogram dispatch and the existing `later` CLI exercise
+  these paths without a production bot.
+- The release owner runbook records the same-repository PR and push blockage,
+  branch/tag/environment settings, and repeatable candidate promotion.
 - Restored PR #7 exactly at `8e70a28` and retained its history in a verified
   local Git bundle. The owner-supplied source ZIP matches all 108 tracked files.
 - Implemented manual candidate preparation, Sigstore provenance checks in

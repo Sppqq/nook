@@ -3,9 +3,7 @@
 import asyncio
 import contextvars
 import datetime as dt
-import fcntl
 import html
-import hmac
 import json
 import logging
 import os
@@ -34,7 +32,9 @@ os.umask(0o077)
 import guard
 import antigravity_limits
 import mods as modsys
+import job_scheduler
 from agent_process import read_tail, stop_process_group
+from telegram_gateway import owner_message, private_callback, private_sender, valid_pair_code
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
@@ -119,14 +119,8 @@ bot = Bot(CFG["bot_token"], default=DefaultBotProperties(link_preview_is_disable
 dp = Dispatcher()
 
 
-def private_sender(msg) -> bool:
-    return bool(msg and msg.chat.type == "private" and msg.from_user
-                and msg.chat.id == msg.from_user.id)
-
-
 def is_owner(msg: Message) -> bool:
-    return (STATE["owner_id"] is not None and private_sender(msg)
-            and msg.from_user.id == STATE["owner_id"])
+    return owner_message(msg, STATE["owner_id"])
 
 
 # ---------------------------------------------------------------- telegram formatting
@@ -1643,7 +1637,7 @@ def busy_line():
 
 
 def jobs_list():
-    return sorted(load_json(JOBS, []), key=lambda j: j["at"])
+    return job_scheduler.list_jobs(JOBS)
 
 
 async def antigravity_quota_rows(model):
@@ -2158,12 +2152,7 @@ async def delete_msgs(chat_id, ids):
 
 
 def cancel_job(jid):
-    with open(JOBS + ".lock", "w") as lk:
-        fcntl.flock(lk, fcntl.LOCK_EX)
-        jobs = load_json(JOBS, [])
-        keep = [j for j in jobs if j["id"] != jid]
-        save_json(JOBS, keep)
-        return len(keep) != len(jobs)
+    return job_scheduler.cancel_job(JOBS, jid)
 
 
 def stop_all(lanes=None):
@@ -2261,8 +2250,7 @@ async def on_button(cb: CallbackQuery):
     try:
         return await handle_button(cb)
     finally:
-        if (notice and STATE["owner_id"] and cb.from_user.id == STATE["owner_id"]
-                and cb.message.chat.type == "private" and cb.message.chat.id == cb.from_user.id):
+        if notice and private_callback(cb) and cb.from_user.id == STATE["owner_id"]:
             trash(cb.message.chat.id, cb.message.message_id, 1)
             for extra in STATE.get("msg_groups", {}).get(str(cb.message.message_id), []):
                 trash(cb.message.chat.id, extra, 1)
@@ -2270,8 +2258,7 @@ async def on_button(cb: CallbackQuery):
 
 async def handle_button(cb: CallbackQuery):
     # Forwarded/group/inline buttons must never send private admin data there.
-    if (not cb.message or cb.message.chat.type != "private"
-            or cb.message.chat.id != cb.from_user.id):
+    if not private_callback(cb):
         return await cb.answer()
     if STATE["owner_id"] and cb.from_user.id != STATE["owner_id"] and is_guest(cb.from_user.id):
         return await guest_button(cb)
@@ -2775,8 +2762,7 @@ async def cmd_start(msg: Message, command: CommandObject):
         if not private_sender(msg):
             return
         pair_code = CFG.get("pair_code")
-        if (not isinstance(pair_code, str) or not pair_code
-                or not hmac.compare_digest((command.args or "").strip().encode(), pair_code.encode())):
+        if not valid_pair_code(command.args, pair_code):
             return await msg.answer("Привет. Я живу на одном сервере и слушаюсь только хозяина. "
                                     "Пришли /start <код привязки>.")
         STATE["owner_id"] = msg.from_user.id
@@ -5113,22 +5099,7 @@ async def send_ask(item):
 
 
 def take_due_jobs():
-    os.makedirs(os.path.dirname(JOBS), exist_ok=True)
-    with open(JOBS + ".lock", "w") as lk:
-        fcntl.flock(lk, fcntl.LOCK_EX)
-        jobs = load_json(JOBS, [])
-        now, due, keep = time.time(), [], []
-        for j in jobs:
-            if j["at"] <= now:
-                due.append(j)
-                if j.get("every"):
-                    j = dict(j, at=max(j["at"] + j["every"], now + 60))
-                    keep.append(j)
-            else:
-                keep.append(j)
-        if due:
-            save_json(JOBS, keep)
-        return due
+    return job_scheduler.take_due(JOBS)
 
 
 REMIND_RE = re.compile(r"(?is)^\W*(напомни|напоминание|напомнить|remind)")
@@ -5144,21 +5115,29 @@ async def remind(j):
     await notify(f"{E('bell')} {text}", markup=kb((btn("Меню", "menu", "home"),)))
 
 
+async def execute_scheduled(job):
+    try:
+        if REMIND_RE.match(job["prompt"]) and not REMIND_WORK_RE.search(job["prompt"]):
+            await remind(job)
+        else:
+            created = job.get("created", job["at"])
+            prompt = (f"[ОТЛОЖЕННАЯ ЗАДАЧА {job['id']}, поставлена "
+                      f"{dt.datetime.fromtimestamp(created):%d.%m %H:%M}"
+                      f"{', повторяется' if job.get('every') else ''}]\n{job['prompt']}\n\n"
+                      "Выполни. Если это напоминание или поручение хозяина — обязательно напиши ему "
+                      "(коротко, по делу). Если это твоя служебная проверка и сказать нечего — ответь SILENT.")
+            await run_task(bg_lane, prompt, background=True, show_progress=False, header=E("jobs") + " ")
+        await asyncio.to_thread(job_scheduler.complete, JOBS, job["claim_id"])
+    except Exception:
+        log.exception("scheduled task %s requires review", job["id"])
+
+
 async def jobs_loop():
     while True:
         try:
-            if STATE["owner_id"]:
-                for j in take_due_jobs():
-                    if REMIND_RE.match(j["prompt"]) and not REMIND_WORK_RE.search(j["prompt"]):
-                        asyncio.create_task(remind(j))
-                        continue
-                    prompt = (f"[ОТЛОЖЕННАЯ ЗАДАЧА {j['id']}, поставлена "
-                              f"{dt.datetime.fromtimestamp(j['created']):%d.%m %H:%M}"
-                              f"{', повторяется' if j.get('every') else ''}]\n{j['prompt']}\n\n"
-                              "Выполни. Если это напоминание или поручение хозяина — обязательно напиши ему "
-                              "(коротко, по делу). Если это твоя служебная проверка и сказать нечего — ответь SILENT.")
-                    asyncio.create_task(run_task(bg_lane, prompt, background=True, show_progress=False,
-                                                 header=E("jobs") + " "))
+            if STATE["owner_id"] and not getattr(core, "backup_active", False):
+                for job in await asyncio.to_thread(take_due_jobs):
+                    asyncio.create_task(execute_scheduled(job))
         except Exception:
             log.exception("jobs failed")
         await asyncio.sleep(20)

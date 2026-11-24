@@ -18,6 +18,7 @@ from unittest.mock import AsyncMock, patch
 import urllib.error
 
 from nook_peers import Peers
+from telegram_gateway import owner_message, private_callback, private_sender, valid_pair_code
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -34,7 +35,9 @@ def bot_functions(*names, **namespace):
     nodes = [node for node in tree.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in names]
     for node in nodes:
         node.decorator_list = []
-    env = {'Message': object, 'CallbackQuery': object, 'CommandObject': object, 'hmac': hmac, **namespace}
+    env = {'Message': object, 'CallbackQuery': object, 'CommandObject': object, 'hmac': hmac,
+           'owner_message': owner_message, 'private_callback': private_callback,
+           'private_sender': private_sender, 'valid_pair_code': valid_pair_code, **namespace}
     exec(compile(ast.Module(body=nodes, type_ignores=[]), 'bot.py', 'exec'), env)
     return env
 

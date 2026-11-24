@@ -28,6 +28,9 @@ changelogs. Each promotion builds and tests a new versioned archive.
 
 ## Repository setup by the owner
 
+See [release operations](docs/RELEASE_OPERATIONS.md) for the verified PR
+state, permission setup, and clean-host acceptance steps.
+
 - Protect `main` with pull-request review and required CI checks. Restrict
   changes to the release workflow to trusted maintainers.
 - Create a ruleset for tags `v*`, restricting creation to release

@@ -341,6 +341,13 @@ def verify_release_provenance(archive, bundle):
         for key in ('GH_TOKEN', 'GITHUB_TOKEN', 'GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN'):
             env.pop(key, None)
         try:
+            help_result = subprocess.run(
+                [gh, 'attestation', 'verify', '--help'], env=env, timeout=5,
+                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            )
+            required = (b'--bundle', b'--signer-workflow', b'--source-ref', b'--deny-self-hosted-runners')
+            if help_result.returncode or not all(flag in help_result.stdout for flag in required):
+                raise UpdateError('Этот GitHub CLI устарел. Обнови gh для проверки Sigstore; вход не нужен.')
             subprocess.run(
                 [gh, 'attestation', 'verify', str(archive), '--bundle', str(bundle),
                  '--repo', REPO, '--signer-workflow', REPO + '/.github/workflows/release.yml',

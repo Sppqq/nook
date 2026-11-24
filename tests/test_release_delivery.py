@@ -1,8 +1,10 @@
 from pathlib import Path
+import tempfile
 import unittest
 from unittest.mock import patch
 
 import installer_source as installer
+from nook_update import UpdateError, verify_release_provenance
 from tools.release_promotion import required_predecessor
 
 
@@ -14,6 +16,15 @@ def release(version, signed=True):
 
 
 class ReleaseDeliveryTests(unittest.TestCase):
+    def test_old_cli_does_not_retry_with_weaker_provenance_flags(self):
+        with tempfile.TemporaryDirectory() as name:
+            cli = Path(name) / 'gh'
+            cli.write_text('#!/bin/sh\nprintf "%s\\n" --bundle --signer-workflow\n')
+            cli.chmod(0o700)
+            with patch('nook_update.shutil.which', return_value=str(cli)):
+                with self.assertRaisesRegex(UpdateError, 'GitHub CLI устарел'):
+                    verify_release_provenance(Path(name) / 'release.zip', Path(name) / 'provenance.jsonl')
+
     def test_channel_selects_before_invoking_staged_install(self):
         versions = [release('1.0.0'), release('1.1.0-beta.1'), release('1.2.0-alpha.1')]
         with patch('nook_update.list_releases', return_value=versions), \
