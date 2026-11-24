@@ -7,6 +7,14 @@
   these paths without a production bot.
 - The release owner runbook records the same-repository PR and push blockage,
   branch/tag/environment settings, and repeatable candidate promotion.
+- Mercury's shell executor has bounded capture, a total request deadline,
+  duplicate tool-ID handling and retry suppression after uncertain outcomes.
+  The Linux benchmark measures startup/import, chart rendering and the
+  persistent queue without provider calls.
+- Next core work: provider/session separation, direct tests for the
+  remaining Telegram handlers, and OS-isolated validation and activation
+  of locally developed mods. Cross-version delegated tasks and full
+  bilingual UI remain open.
 - Restored PR #7 exactly at `8e70a28` and retained its history in a verified
   local Git bundle. The owner-supplied source ZIP matches all 108 tracked files.
 - Implemented manual candidate preparation, Sigstore provenance checks in

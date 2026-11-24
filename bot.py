@@ -35,6 +35,7 @@ import mods as modsys
 import job_scheduler
 from agent_process import read_tail, stop_process_group
 from telegram_gateway import owner_message, private_callback, private_sender, valid_pair_code
+from tool_executor import ShellCalls
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
@@ -737,7 +738,7 @@ SHELL_TOOL = {"type": "function", "function": {
 
 
 def is_mercury_thread(tid):
-    return bool(tid) and str(tid).startswith("merc-")
+    return isinstance(tid, str) and re.fullmatch(r"merc-[A-Za-z0-9_-]{1,64}", tid) is not None
 
 
 def mercury_key():
@@ -771,9 +772,9 @@ async def mercury_chat(messages, tools=None, effort=None, timeout=120):
                                   headers={"Authorization": f"Bearer {mercury_key()}"}) as r:
                 d = await r.json(content_type=None)
             if r.status >= 500 or r.status == 429:
-                raise RuntimeError(f"Mercury HTTP {r.status}: {str(d)[:200]}")
+                raise RuntimeError(f"Mercury HTTP {r.status}")
             if r.status != 200:
-                raise ValueError(f"Mercury HTTP {r.status}: {str(d)[:300]}")
+                raise ValueError(f"Mercury HTTP {r.status}")
             return d["choices"][0]["message"], d.get("usage", {})
         except ValueError:
             raise
@@ -823,51 +824,43 @@ async def run_mercury(prompt, thread_id=None, images=(), on_step=None, run: Run 
     run_id = uuid.uuid4().hex[:12]
     RUN_THREADS[run_id] = tid
     env = codex_env(run_id)
-    final, err, started = "", None, time.time()
+    final, err = "", None
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    shell = ShellCalls()
     try:
         for _ in range(MERCURY_STEPS):
             if run.cancelled:
                 err = "остановлено"
                 break
-            if time.time() - started > timeout:
+            remaining = deadline - loop.time()
+            if remaining <= 0:
                 err = f"таймаут {timeout // 60} мин"
                 break
-            m, _ = await mercury_chat(msgs, [SHELL_TOOL])
+            m, _ = await asyncio.wait_for(mercury_chat(msgs, [SHELL_TOOL]), remaining)
             calls = m.get("tool_calls") or []
+            if not isinstance(calls, list) or any(
+                    not isinstance(call, dict) or not isinstance(call.get("id"), str) or not call["id"]
+                    for call in calls):
+                err = "Mercury вернул некорректный список инструментов."
+                break
+            if len({call["id"] for call in calls}) != len(calls):
+                err = "Mercury вернул повторяющиеся ID инструментов."
+                break
             msgs.append({k: v for k, v in m.items() if k in ("role", "content", "tool_calls") and v is not None})
             if not calls:
                 final = (m.get("content") or "").strip()
                 break
             for c in calls:
-                try:
-                    args = json.loads(c["function"].get("arguments") or "{}")
-                except json.JSONDecodeError:
-                    args = {}
-                cmd = str(args.get("cmd", ""))
-                if on_step:
-                    await on_step("▸ " + cmd.replace("\n", " ")[:120])
-                proc = await asyncio.create_subprocess_exec(
-                    "bash", "-lc", cmd, cwd=HOME, env=env, start_new_session=True,
-                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
-                run.proc = proc
-                try:
-                    out, _ = await asyncio.wait_for(proc.communicate(), min(int(args.get("timeout") or 120), 900))
-                    out = out.decode(errors="replace")
-                    code = proc.returncode
-                except asyncio.TimeoutError:
-                    out, code = "таймаут команды", -1
-                finally:
-                    await stop_process_group(proc)
-                    run.proc = None
-                if on_step:
-                    await on_step(("✓ " if code == 0 else "✗ ") + cmd.replace("\n", " ")[:120])
-                if len(out) > 8000:
-                    out = out[:3000] + "\n…[обрезано]…\n" + out[-5000:]
-                msgs.append({"role": "tool", "tool_call_id": c.get("id"), "content": f"exit {code}\n{out}"})
+                result = await shell.execute(c, cwd=HOME, env=env, run=run, deadline=deadline, on_step=on_step)
+                msgs.append({"role": "tool", "tool_call_id": c["id"], "content": f"exit {result.code}\n{result.output}"})
         else:
             err = f"не уложился в {MERCURY_STEPS} шагов"
+    except TimeoutError:
+        err = f"таймаут {timeout // 60} мин"
     except Exception as e:
-        err = f"Mercury: {e}"
+        log.warning("Mercury execution failed: %s", type(e).__name__)
+        err = "Mercury: не удалось выполнить запрос."
     # длинные разговоры: системный + хвост не больше ~60 сообщений и ~120k символов (≈35k токенов)
     tail, size = [], 0
     for mm in reversed(msgs[1:]):

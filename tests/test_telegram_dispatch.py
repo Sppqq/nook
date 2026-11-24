@@ -1,5 +1,6 @@
 """Run actual aiogram dispatch and installed Nook callbacks without Telegram I/O."""
 import importlib.util
+import asyncio
 import json
 from pathlib import Path
 import shutil
@@ -65,3 +66,28 @@ class TelegramDispatchTests(unittest.IsolatedAsyncioTestCase):
             await self.dispatch('mod:update_manager:set-channel:nightly', sender, chat, kind)
         self.assertIsNone(update_settings(self.home)['channel'])
         self.runtime['REG'].core.edit.assert_not_awaited()
+
+    async def test_real_mercury_runner_deduplicates_execution_and_saves_session(self):
+        self.runtime['mercury_key'] = lambda: 'fixture'
+        self.runtime['mercury_system'] = lambda: 'fixture system instructions'
+        invocation = {'id': 'same-call', 'type': 'function', 'function': {
+            'name': 'shell', 'arguments': '{"cmd":"printf x >> completed"}',
+        }}
+        reply = {'role': 'assistant', 'tool_calls': [invocation]}
+        provider = AsyncMock(side_effect=[(reply, {}), (reply, {}), ({'role': 'assistant', 'content': 'done'}, {})])
+        self.runtime['mercury_chat'] = provider
+        thread, final, error = await self.runtime['run_mercury']('test', timeout=5)
+        self.assertEqual((final, error), ('done', None))
+        self.assertEqual((self.home / 'completed').read_text(), 'x')
+        self.assertTrue((self.home / 'spool/mercury' / (thread + '.json')).is_file())
+
+    async def test_mercury_provider_wait_cannot_exceed_request_deadline(self):
+        self.runtime['mercury_key'] = lambda: 'fixture'
+        self.runtime['mercury_system'] = lambda: 'fixture system instructions'
+
+        async def stalled(*args):
+            await asyncio.sleep(10)
+
+        self.runtime['mercury_chat'] = stalled
+        _, _, error = await asyncio.wait_for(self.runtime['run_mercury']('test', timeout=0.04), 1)
+        self.assertIn('таймаут', error)

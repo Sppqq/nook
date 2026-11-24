@@ -10,6 +10,11 @@
 - Confirmed the two GitHub check suites still report `action_required` before
   jobs. Added an owner runbook, and taught the installer/updater to
   distinguish an outdated GitHub CLI without relaxing provenance checks.
+- Extracted the Mercury shell executor and added real subprocess tests
+  for timeout, bounded capture and replay protection, plus direct runtime
+  checks for provider wait and persisted sessions.
+- Added a disposable Linux benchmark for startup, CPU, peak RSS and
+  sustained durable queue work.
 
 ## 2026-11-24 — Iteration 3
 

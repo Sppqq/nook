@@ -10,6 +10,16 @@
   held until its unresolved claim is closed.
 - A real aiogram dispatch test covers owner-only channel switching, rejection
   of group/foreign callbacks, and an empty release channel.
+- Mercury previously buffered the full stdout and could exceed its request
+  budget within a tool batch or provider wait. Now it retains bounded output,
+  constrains the request budget, and rejects repeat attempts when a previous
+  shell call timed out. The protection covers identical commands within one
+  request and scheduled occurrences across restart. It cannot determine
+  whether different commands have the same effect.
+- The legacy source updater still trusts GitHub HTTPS and the selected
+  `main` revision and has no independent publisher identity. Managed
+  channels verify provenance. A prompt and the installed mod registry do
+  not isolate arbitrary code from secrets accessible to the service UID.
 - PR #7 is open against `dev` at `8e70a28`. Its two Checks runs reported
   `action_required` with no jobs in the public API. GitHub reports two
   historical releases and marks both as prereleases.
