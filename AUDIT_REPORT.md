@@ -22,6 +22,10 @@
 - Applying an update now checks free space, syncs the rollback journal, and
   preserves a frozen recovery process. Automatic installs must be enabled by
   the owner, and the request path rejects a downgrade without explicit consent.
+- Codex could hang beyond its requested timeout while a child process
+  retained a pipe. Its full request now has a deadline and bounded
+  diagnostics. Codex requests and quota checks and Mercury shell tools share
+  process cleanup with a bounded termination sequence.
 
 ## Historical Stage 0 and iteration 2 baseline
 

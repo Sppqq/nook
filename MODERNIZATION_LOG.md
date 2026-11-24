@@ -21,6 +21,11 @@
 - Added a crash-durable journal, frozen updater startup recovery, low-space
   preflight, explicit downgrade approval, and owner-controlled unattended
   upgrades. New configurations default to off.
+- The Ubuntu suite passed 131 unit tests, 3 API tests, simulated runtime
+  checks and the Alpha archive checks. Local actionlint passed and pip-audit
+  reported no known advisories for the two requirement files at run time.
+- Extracted bounded process-group teardown and diagnostics to
+  `agent_process.py` in the first incremental runtime refactor.
 
 ## Historical baseline — 2026-11-24, iteration 2
 

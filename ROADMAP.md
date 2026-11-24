@@ -17,6 +17,8 @@
 - The updater now binds staged plans to settings, supports explicit downgrade,
   and recovers incomplete transactions through a frozen supervisor. Automatic
   updates default to off.
+- Extracted process-group cleanup from `bot.py` for Codex execution and quota
+  checks, and for Mercury shell lifetime management.
 - Live GitHub publication, production-like provider authentication and
   broader architecture, performance, coverage and localization work remain.
 

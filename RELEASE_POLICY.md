@@ -8,6 +8,8 @@ a tag does not launch the workflow.
 1. Run the workflow with Publish off to prepare the branch or an existing
    tag. It checks Python, the installer, runtime smoke tests, checksums and the
    tracked manifest. Download the resulting candidate from the workflow run.
+   GitHub must first see this workflow on the default branch to offer manual
+   dispatch.
 2. After review, an authorized maintainer creates the exact version tag on a
    commit reachable from protected `main`. Verify the appropriate promotion
    predecessor when dispatching for a tag.

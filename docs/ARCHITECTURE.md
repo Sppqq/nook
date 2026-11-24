@@ -1,6 +1,6 @@
 # Architecture
 
-`bot.py` receives Telegram messages, checks the owner's identity, queues tasks, selects a provider, and sends results. Codex and Antigravity run as CLI subprocesses. Mercury uses an HTTP API and a shell-tool loop; its private conversations live under `spool/mercury/`.
+`bot.py` receives Telegram messages, checks the owner's identity, queues tasks, selects a provider, and sends results. Codex and Antigravity run as CLI subprocesses. Mercury uses an HTTP API and a shell-tool loop; its private conversations live under `spool/mercury/`. `agent_process.py` bounds CLI diagnostics and closes process groups for Codex, its quota query and Mercury tool execution after timeouts or cancellation.
 
 `ui_settings.py` defines button visibility, appearance preferences, and presets. Preferences live in private runtime state and do not change provider configuration or monitoring. Owner checks and privileged approval actions are outside the visibility filters.
 
@@ -12,10 +12,25 @@
 
 `templates/runtime/` contains only empty initial files. The installer creates local data from those templates, renders installation paths, and writes private configuration. Runtime and credential paths beside a source checkout are excluded from source validation and copying; they are not release assets. Git ignores working data. Provider credentials are configured independently.
 
-`tools/build_release.py` reads Git's explicit file list, checks the composition, rebuilds `MANIFEST.json`, and writes ZIP/JSON bundles and checksums to ignored `dist/`. `bootstrap.sh` downloads one GitHub source snapshot, rejects unsafe archive entries, and runs the wizard using `/dev/tty`. The wizard verifies `MANIFEST.json` before installing. Git clone installation remains available.
+`tools/build_release.py` reads Git's explicit file list, rebuilds
+`MANIFEST.json`, and writes ZIP/JSON bundles and checksums to ignored
+`dist/`. `bootstrap.sh` loads source-selection code pinned by Git blob and
+SHA-256. `installer_source.py` selects and verifies the published artifact
+before invoking the wizard. The explicit development path accepts a verified
+development checkout or snapshot.
 
-`release_channels.py` implements SemVer precedence and the per-channel prerelease policy. `nook_update.py` preserves legacy `main` updates until an owner selects a release channel; selected releases require a GitHub Release SHA-256 asset digest and are staged against pinned source hashes. `mods/update_manager.py` exposes channel, pin, changelog and confirmation controls through the mod API.
+`release_channels.py` implements version and promotion precedence for each
+channel. `nook_update.py` verifies release provenance, stages changes against
+installed hashes, and writes rollback intent before touching live source.
+`tools/start_guard.py` calls the frozen updater to recover an interrupted
+transaction before startup. `mods/update_manager.py` exposes release and
+backup controls. Legacy `main` updates stay available until a channel is
+selected.
 
-`backup_manager.py` creates private source/runtime archives with a per-file integrity manifest and a narrow allowlist of external Codex/Antigravity credentials and sessions. Restore validates the archive and writes only to a new directory; provider files remain under `provider-home/` for owner-reviewed manual placement and never replace the active credentials.
+`backup_manager.py` creates private source/runtime archives with a per-file
+manifest. SQLite has transaction-consistent snapshots, and other file
+changes invalidate the backup. The operator can opt in to external
+Codex/Antigravity credentials and sessions. They restore under
+`provider-home/` inside the new instance directory.
 
 `nook_peers.py` and `mods/peer_chat.py` exchange per-pair HMAC-signed envelopes over existing SSH. Receivers verify expiry, signatures, replay IDs, and rate limits before writing a private SQLite inbox. The mod batches owner notifications and can produce one text-only Mercury reply per original message. Incoming correspondence never enters the command queue. See `docs/PEERS.md`.

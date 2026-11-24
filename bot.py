@@ -34,6 +34,7 @@ os.umask(0o077)
 import guard
 import antigravity_limits
 import mods as modsys
+from agent_process import read_tail, stop_process_group
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
@@ -646,12 +647,8 @@ async def run_codex(prompt, thread_id=None, images=(), on_step=None, run: Run = 
         *cmd, cwd=HOME, env=codex_env(run_id), start_new_session=True, limit=16 * 1024 * 1024,
         stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
     run.proc = proc
-    proc.stdin.write(prompt.encode())
-    await proc.stdin.drain()
-    proc.stdin.close()
-
     new_thread, last_msg, errors = thread_id, "", []
-    stderr_task = asyncio.create_task(proc.stderr.read())
+    stderr_task = asyncio.create_task(read_tail(proc.stderr))
 
     async def pump():
         nonlocal new_thread, last_msg
@@ -675,13 +672,30 @@ async def run_codex(prompt, thread_id=None, images=(), on_step=None, run: Run = 
             elif et in ("error", "turn.failed"):
                 errors.append(str(ev.get("message") or ev.get("error")))
 
-    try:
-        await asyncio.wait_for(pump(), timeout)
+    async def complete():
+        proc.stdin.write(prompt.encode())
+        try:
+            await proc.stdin.drain()
+        except (BrokenPipeError, ConnectionResetError):
+            pass  # A startup error can close stdin before the initial prompt is read.
+        finally:
+            proc.stdin.close()
+        await pump()
         await proc.wait()
+        return await asyncio.shield(stderr_task)
+
+    try:
+        stderr = (await asyncio.wait_for(complete(), timeout)).decode(errors="replace")
     except asyncio.TimeoutError:
         run.cancel()
         errors.append(f"таймаут {timeout // 60} мин")
-    stderr = (await stderr_task).decode(errors="replace")
+        stderr = ""
+    finally:
+        if not stderr_task.done():
+            stderr_task.cancel()
+        await asyncio.gather(stderr_task, return_exceptions=True)
+        await stop_process_group(proc)
+        run.proc = None
     try:
         with open(out_file) as f:
             final = f.read().strip() or last_msg
@@ -847,9 +861,10 @@ async def run_mercury(prompt, thread_id=None, images=(), on_step=None, run: Run 
                     out = out.decode(errors="replace")
                     code = proc.returncode
                 except asyncio.TimeoutError:
-                    run.cancel()
-                    run.cancelled = False
                     out, code = "таймаут команды", -1
+                finally:
+                    await stop_process_group(proc)
+                    run.proc = None
                 if on_step:
                     await on_step(("✓ " if code == 0 else "✗ ") + cmd.replace("\n", " ")[:120])
                 if len(out) > 8000:
@@ -1131,10 +1146,7 @@ async def limits_live():
                     return ev["result"]
         r = await asyncio.wait_for(read(), 20)
     finally:
-        try:
-            os.killpg(proc.pid, signal.SIGTERM)
-        except ProcessLookupError:
-            pass
+        await stop_process_group(proc)
     rl = r["rateLimits"]
     win = lambda w: w and {"used": w["usedPercent"], "mins": w["windowDurationMins"], "reset": w["resetsAt"]}
     return {"primary": win(rl.get("primary")), "secondary": win(rl.get("secondary")),
