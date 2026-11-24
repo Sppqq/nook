@@ -1,6 +1,6 @@
 import sys
 sys.dont_write_bytecode=True
-import contextlib, importlib.util, io, json, os, tempfile, unittest
+import contextlib, hashlib, importlib.util, io, json, os, shutil, tempfile, unittest
 from pathlib import Path
 from unittest.mock import patch
 from types import SimpleNamespace
@@ -14,6 +14,38 @@ class InstallerTests(unittest.TestCase):
   self.home_patch=patch.dict(os.environ,{'HOME':str(self.home)});self.home_patch.start();self.addCleanup(self.home_patch.stop)
   self.out=io.StringIO();self.redirect=contextlib.redirect_stdout(self.out);self.redirect.__enter__();self.addCleanup(self.redirect.__exit__,None,None,None)
  def response(self,value):return io.BytesIO(json.dumps(value).encode())
+ def test_local_runtime_data_is_ignored_and_not_copied(self):
+  source=self.home/'source';source.mkdir()
+  files={'install.sh':'#!/bin/sh\n','mods/custom.py':'LOCAL=True\n'}
+  for rel,data in files.items():
+   path=source/rel;path.parent.mkdir(parents=True,exist_ok=True);path.write_text(data)
+  manifest={'format':1,'sha256':{rel:hashlib.sha256(data.encode()).hexdigest() for rel,data in files.items()}}
+  (source/'MANIFEST.json').write_text(json.dumps(manifest))
+  (source/'memory/notes.md').parent.mkdir(parents=True)
+  (source/'memory/notes.md').write_text('private memory')
+  (source/'config.json').write_text('private config')
+  (source/'.env').write_text('private environment')
+  (source/'.codex').mkdir()
+  (source/'.codex/auth.json').write_text('private provider session')
+  with patch.object(m,'SOURCE',source):
+   m.validate(source)
+   target=self.home/'installed'
+   shutil.copytree(source,target,ignore=m.ignore_source_data)
+  self.assertFalse((target/'memory/notes.md').exists())
+  self.assertFalse((target/'config.json').exists())
+  self.assertFalse((target/'.env').exists())
+  self.assertFalse((target/'.codex/auth.json').exists())
+  self.assertTrue((target/'mods/custom.py').is_file())
+ def test_manifest_version_must_match_canonical_version(self):
+  source=self.home/'version-source';source.mkdir()
+  data='#!/bin/sh\n'
+  (source/'install.sh').write_text(data)
+  (source/'VERSION').write_text('1.2.3\n')
+  hashes={name:hashlib.sha256(value.encode()).hexdigest() for name,value in
+          {'install.sh':data,'VERSION':'1.2.3\n'}.items()}
+  (source/'MANIFEST.json').write_text(json.dumps({'format':1,'version':'1.2.4','sha256':hashes}))
+  with patch.object(m,'SOURCE',source),self.assertRaisesRegex(SystemExit,'VERSION'):
+   m.validate(source)
  def test_terms_explicit_flag_and_yes_does_not_accept(self):
   with patch.object(m.sys.stdin,'isatty',return_value=False):
    m.accept_terms(SimpleNamespace(accept_terms=True,yes=True))
@@ -61,9 +93,11 @@ class InstallerTests(unittest.TestCase):
    calls.append([str(a) for a in args])
    if len(args)>2 and args[1:3]==['-m','venv']:
     py=Path(args[3])/'bin/python';py.parent.mkdir(parents=True);py.write_text('mock-python')
-  argv=['install.py','--accept-terms','--target',str(self.target),'--no-system-packages','--no-start','--owner-id','123456','--token-file',str(tokenfile)]
+  argv=['install.py','--accept-terms','--target',str(self.target),'--no-system-packages','--no-start','--owner-id','123456','--token-file',str(tokenfile),'--channel','alpha']
   with patch.object(m.os,'getuid',return_value=1001),patch.object(m.getpass,'getuser',return_value='friend'),patch.object(m,'run',side_effect=fake_run),patch.object(m,'setup_providers') as providers,patch.object(sys,'argv',argv):
    m.main();providers.assert_called_once()
+   from nook_update import update_settings
+   self.assertEqual(update_settings(self.target)['channel'],'alpha')
    cfg=(self.target/'config.json').read_bytes();self.assertEqual(json.loads(cfg)['owner_id'],123456)
    service=self.home/'.config/systemd/user/nook.service';self.assertIn(str(self.target),service.read_text())
    self.assertNotIn('start',[c[2] for c in calls if len(c)>2 and c[0]=='systemctl'])
@@ -81,10 +115,11 @@ class InstallerTests(unittest.TestCase):
    self.assertEqual(json.loads((self.target/'nodes.json').read_text()), [])
    # A Mercury-only installation must work on its first conversation.
    mercury_target=self.home/'mercury-only'
-   mercury_argv=argv+['--skip-codex','--skip-antigravity','--target',str(mercury_target)]
+   mercury_argv=argv+['--skip-codex','--skip-antigravity','--target',str(mercury_target),'--channel','alpha']
    with patch.object(sys,'argv',mercury_argv),patch.object(m,'setup_service'):
     m.main()
    self.assertEqual(json.loads((mercury_target/'config.json').read_text())['model'],'mercury-3')
+   self.assertEqual(update_settings(mercury_target)['channel'],'alpha')
 
 class WizardTests(unittest.TestCase):
  def args(self, **kwargs):
@@ -113,6 +148,25 @@ class WizardTests(unittest.TestCase):
   with patch.object(m.sys.stdin,'isatty',return_value=True),patch('builtins.input') as prompt:
    m.choose_options(args)
   prompt.assert_not_called()
+ def test_install_channel_and_version_selection(self):
+  self.assertTrue(m.validate_update_selection('1.2.0','stable'))
+  self.assertTrue(m.validate_update_selection('1.2.0-rc.1','beta','1.2.0-rc.1'))
+  with self.assertRaisesRegex(ValueError,'не допускает'):
+   m.validate_update_selection('1.2.0-alpha.1','stable')
+  with self.assertRaisesRegex(ValueError,'совпадать'):
+   m.validate_update_selection('1.2.0','stable','1.1.0')
+ def test_update_channel_and_source_pin_prompts(self):
+  args=SimpleNamespace(channel=None,version=None,yes=False)
+  with patch.object(m.sys.stdin,'isatty',return_value=True),patch('builtins.input',side_effect=['3','yes']),contextlib.redirect_stdout(io.StringIO()):
+   m.choose_update_settings(args,'1.2.0-beta.1')
+  self.assertEqual(args.channel,'beta')
+  self.assertEqual(args.version,'1.2.0-beta.1')
+ def test_noninteractive_update_selection_defaults_to_stable_and_unpinned(self):
+  args=SimpleNamespace(channel=None,version=None,yes=False)
+  with patch.object(m.sys.stdin,'isatty',return_value=False):
+   m.choose_update_settings(args,'1.2.0')
+  self.assertEqual(args.channel,'stable')
+  self.assertIsNone(args.version)
 
 if __name__ == "__main__":
  unittest.main()

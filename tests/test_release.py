@@ -1,4 +1,5 @@
 import importlib.util
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -19,6 +20,28 @@ class ReleaseTests(unittest.TestCase):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(value)
         return path
+
+    def test_canonical_version_accepts_semver_and_rejects_invalid_values(self):
+        current = release.project_version(ROOT)
+        self.assertEqual(current, '0.1.2-alpha.1')
+        self.assertEqual(current, json.loads((ROOT / 'MANIFEST.json').read_text())['version'])
+        for value in ('1.2.3', '1.2.3-rc.1', '1.2.3-nightly.20261124'):
+            with self.subTest(value=value):
+                self.put('VERSION', value + '\n')
+                self.assertEqual(release.project_version(self.root), value)
+        for value in ('01.2.3', '1.2', '1.2.3-alpha.01'):
+            with self.subTest(value=value):
+                self.put('VERSION', value + '\n')
+                with self.assertRaises(ValueError):
+                    release.project_version(self.root)
+
+    def test_sbom_lists_direct_dependencies_and_states_scope(self):
+        data = json.loads(release.build_sbom(ROOT, '0.1.1'))
+        self.assertEqual(data['spdxVersion'], 'SPDX-2.3')
+        packages = {item['name']: item['versionInfo'] for item in data['packages']}
+        self.assertEqual(packages['aiogram'], '3.31.0')
+        self.assertEqual(packages['faster-whisper'], '1.2.1')
+        self.assertIn('does not include transitive dependencies', data['comment'])
 
     def test_private_runtime_even_if_tracked(self):
         for name in ('secrets.env', 'config.json', 'memory/notes.md', 'keys/id', '.codex/auth.json', 'spool/tasks.json'):

@@ -6,6 +6,14 @@
 - Show the active provider's quota in the menu and status. The optional Codex account switcher can display quota for saved accounts with a compatible codex-auth CLI.
 - Add a close button to the main menu and show Antigravity progress from the start of a request.
 
+## 0.1.2-alpha.1
+
+- SemVer release selection with Stable, RC, Beta, Alpha and Nightly channels; existing installs retain the legacy update path until their owner chooses a channel.
+- Release checks use GitHub Release asset digests, pinned tag commits, safe archive validation and explicit downgrade confirmation.
+- Telegram update controls include channel/version selection, pins, changelog, pause, notification or confirmed install checks, and backup creation.
+- Add private integrity-checked instance backups and verified out-of-place restore; fresh installation can select a channel and matching source tag.
+- Add tag-validated release workflow, release notes, SHA-256 checksums and a direct-dependency SPDX SBOM.
+
 - Conservative GitHub source updater, Telegram confirmation, local-edit conflicts, preserved runtime data, independent restart supervision and source rollback.
 
 - Signed peer conversations over existing SSH, Telegram panel, optional text-only Mercury replies, replay protection and per-peer limits.

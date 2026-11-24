@@ -16,12 +16,19 @@ import sys
 import tarfile
 import tempfile
 import time
+from urllib.parse import quote, urlparse
 import urllib.request
 import uuid
+import zipfile
+
+from release_channels import (CHANNELS, channel_for_version, compare_versions,
+                              eligible_releases, select_release)
 
 ROOT = Path(__file__).resolve().parent
 REPO = 'Sppqq/nook'
 STATE = '.nook-install.json'
+UPDATE_SETTINGS = 'spool/updates/settings.json'
+AUTO_MODES = {'off', 'notify', 'confirm'}
 TOP = {'MANIFEST.json', 'README.md', 'CHANGELOG.md', 'CONTRIBUTING.md', 'LICENSE',
        'SECURITY.md', '.gitignore', 'config.example.json', 'secrets.env.example',
        'requirements.txt', 'requirements-voice.txt', 'bootstrap.sh', 'install.sh'}
@@ -89,6 +96,57 @@ def workspace(home):
     base = path_at(home, 'spool/updates')
     base.mkdir(parents=True, exist_ok=True, mode=0o700)
     return base
+
+
+def update_settings(home):
+    path = path_at(home, UPDATE_SETTINGS)
+    if not path.exists():
+        return {'schema': 1, 'channel': None, 'version_pin': None,
+                'auto_mode': 'off', 'paused': False}
+    settings = read_json(path)
+    if (settings.get('schema') != 1
+            or settings.get('channel') is not None and settings.get('channel') not in CHANNELS
+            or settings.get('version_pin') is not None
+            and (not isinstance(settings['version_pin'], str)
+                 or _version_channel(settings['version_pin']) is None)
+            or settings.get('auto_mode') not in AUTO_MODES
+            or type(settings.get('paused')) is not bool):
+        raise UpdateError('Некорректные настройки канала обновлений.')
+    return settings
+
+
+def _version_channel(version):
+    try:
+        return channel_for_version(version)
+    except ValueError:
+        return None
+
+
+def save_update_settings(home, *, channel=None, version_pin=None,
+                         auto_mode=None, paused=None, clear_version_pin=False):
+    with lock(home):
+        current = update_settings(home)
+        if channel is not None:
+            if channel not in CHANNELS:
+                raise UpdateError('Неизвестный канал обновлений.')
+            current['channel'] = channel
+        if clear_version_pin:
+            current['version_pin'] = None
+        elif version_pin is not None:
+            if _version_channel(version_pin) is None:
+                raise UpdateError('Некорректная закреплённая версия.')
+            current['version_pin'] = version_pin
+        if auto_mode is not None:
+            if auto_mode not in AUTO_MODES:
+                raise UpdateError('Неизвестный режим автообновления.')
+            current['auto_mode'] = auto_mode
+        if paused is not None:
+            if type(paused) is not bool:
+                raise UpdateError('Некорректное состояние обновлений.')
+            current['paused'] = paused
+        path = path_at(home, UPDATE_SETTINGS)
+        json_write(path, current)
+        return current
 
 
 @contextlib.contextmanager
@@ -161,6 +219,139 @@ def download(url, dest, limit):
             if size > limit:
                 raise UpdateError('Слишком большой ответ GitHub.')
             out.write(chunk)
+
+
+def github_json(url, limit=2 * 1024 * 1024):
+    req = urllib.request.Request(url, headers={
+        'Accept': 'application/vnd.github+json',
+        'User-Agent': 'Nook-release-updater',
+    })
+    with urllib.request.urlopen(req, timeout=30) as response:
+        data = response.read(limit + 1)
+    if len(data) > limit:
+        raise UpdateError('Слишком большой ответ GitHub.')
+    try:
+        return json.loads(data)
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        raise UpdateError('GitHub вернул некорректные данные релиза.') from None
+
+
+def list_releases():
+    url = f'https://api.github.com/repos/{REPO}/releases?per_page=100'
+    releases = github_json(url)
+    if not isinstance(releases, list):
+        raise UpdateError('GitHub вернул некорректный список релизов.')
+    return releases
+
+
+def release_commit(tag):
+    ref = github_json(
+        f'https://api.github.com/repos/{REPO}/git/ref/tags/{quote(tag, safe="")}')
+    obj = ref.get('object') if isinstance(ref, dict) else None
+    for _ in range(5):
+        if not isinstance(obj, dict) or not re.fullmatch('[a-f0-9]{40}', str(obj.get('sha', ''))):
+            break
+        if obj.get('type') == 'commit':
+            return obj['sha']
+        if obj.get('type') != 'tag':
+            break
+        tagged = github_json(f'https://api.github.com/repos/{REPO}/git/tags/{obj["sha"]}')
+        obj = tagged.get('object') if isinstance(tagged, dict) else None
+    raise UpdateError('Не удалось разрешить тег релиза в неизменяемый commit.')
+
+
+def download_release_asset(release, dest, version, limit=10 * 1024 * 1024):
+    assets = release.get('assets')
+    expected_name = 'nook-' + version + '.zip'
+    if not isinstance(assets, list):
+        raise UpdateError('GitHub Release не содержит проверяемых артефактов.')
+    asset = next((item for item in assets if isinstance(item, dict)
+                  and item.get('name') == expected_name), None)
+    if asset is None:
+        raise UpdateError('В GitHub Release отсутствует архив исходников: ' + expected_name)
+    digest_value = asset.get('digest')
+    if not isinstance(digest_value, str) or not re.fullmatch(r'sha256:[a-f0-9]{64}', digest_value):
+        raise UpdateError('GitHub не предоставляет SHA-256 артефакта; обновление отменено.')
+    expected_url = f'https://github.com/{REPO}/releases/download/v{version}/{expected_name}'
+    if asset.get('browser_download_url') != expected_url:
+        raise UpdateError('Ссылка на артефакт не соответствует выбранному релизу.')
+    req = urllib.request.Request(expected_url, headers={
+        'Accept': 'application/octet-stream',
+        'User-Agent': 'Nook-release-updater',
+    })
+    size = 0
+    hasher = hashlib.sha256()
+    try:
+        with urllib.request.urlopen(req, timeout=45) as response, Path(dest).open('wb') as out:
+            final_host = urlparse(response.geturl()).hostname
+            if final_host not in {
+                    'github.com', 'release-assets.githubusercontent.com',
+                    'objects.githubusercontent.com'}:
+                raise UpdateError('GitHub перенаправил загрузку на недоверенный адрес.')
+            while True:
+                chunk = response.read(65536)
+                if not chunk:
+                    break
+                size += len(chunk)
+                if size > limit:
+                    raise UpdateError('Артефакт релиза слишком большой.')
+                hasher.update(chunk)
+                out.write(chunk)
+    except UpdateError:
+        raise
+    except OSError:
+        raise UpdateError('Не удалось загрузить артефакт GitHub Release.') from None
+    if 'sha256:' + hasher.hexdigest() != digest_value:
+        Path(dest).unlink(missing_ok=True)
+        raise UpdateError('Контрольная сумма артефакта GitHub Release не совпала.')
+
+
+def unpack_zip(archive, dest):
+    total, seen = 0, set()
+    try:
+        with zipfile.ZipFile(archive) as source:
+            items = source.infolist()
+            if len(items) > 2000:
+                raise UpdateError('В архиве слишком много файлов.')
+            for item in items:
+                parts = safe_rel(item.filename.rstrip('/')).parts
+                if item.is_dir():
+                    continue
+                mode = item.external_attr >> 16
+                if (len(parts) < 1 or item.flag_bits & 1
+                        or mode and not (mode & 0o170000) == 0o100000):
+                    raise UpdateError('Ссылки, специальные и зашифрованные файлы запрещены.')
+                name = '/'.join(parts)
+                if name in seen:
+                    raise UpdateError('Повтор файла в архиве.')
+                seen.add(name)
+                total += item.file_size
+                if item.file_size > 5 * 1024 * 1024 or total > 50 * 1024 * 1024:
+                    raise UpdateError('Слишком большой архив релиза.')
+                target = path_at(dest, name)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_NOFOLLOW', 0)
+                fd = os.open(target, flags, 0o600)
+                with os.fdopen(fd, 'wb') as out, source.open(item) as data:
+                    shutil.copyfileobj(data, out)
+                target.chmod(0o755 if mode & 0o111 else 0o644)
+    except UpdateError:
+        raise
+    except (OSError, EOFError, zipfile.BadZipFile, RuntimeError):
+        raise UpdateError('Архив GitHub Release повреждён.') from None
+
+
+def prepare_stage(home, stage, revision):
+    archive = stage / 'source.tar.gz'
+    download('https://codeload.github.com/' + REPO + '/tar.gz/' + revision,
+             archive, 10 * 1024 * 1024)
+    source = stage / 'source'
+    source.mkdir()
+    unpack(archive, source)
+    plan = plan_source(home, source, revision, stage)
+    plan['version'] = read_json(source / 'MANIFEST.json')['version']
+    json_write(stage / 'plan.json', plan)
+    return plan
 
 
 def unpack(archive, dest):
@@ -246,7 +437,14 @@ def plan_source(home, source, revision, stage):
     return plan
 
 
-def prepare(home):
+def prepare(home, version=None):
+    settings = update_settings(home)
+    if settings['paused']:
+        raise UpdateError('Проверка обновлений приостановлена владельцем.')
+    if settings['channel'] is not None:
+        return prepare_release(home, version or settings['version_pin'])
+    if version is not None:
+        raise UpdateError('Сначала выбери канал обновлений для выбора версии.')
     with lock(home):
         baseline(home)  # Refuse private/unknown installs before downloading anything.
         base = workspace(home)
@@ -261,12 +459,49 @@ def prepare(home):
         revision = read_json(stage / 'commit.json')['sha']
         if not re.fullmatch('[a-f0-9]{40}', revision):
             raise UpdateError('Некорректная версия GitHub.')
-        download('https://codeload.github.com/' + REPO + '/tar.gz/' + revision,
-                 stage / 'source.tar.gz', 10 * 1024 * 1024)
+        return prepare_stage(home, stage, revision)
+
+
+def prepare_release(home, version=None):
+    with lock(home):
+        baseline(home)
+        settings = update_settings(home)
+        if settings['channel'] is None:
+            raise UpdateError('Сначала выбери канал обновлений.')
+        if settings['paused']:
+            raise UpdateError('Проверка обновлений приостановлена владельцем.')
+        base = workspace(home)
+        if (base / 'transaction.json').exists():
+            txn = read_json(base / 'transaction.json')
+            if txn['status'] not in ('success', 'rolled_back'):
+                raise UpdateError('Есть незавершённое обновление. Сначала проверь статус и выполни откат.')
+        release = select_release(list_releases(), settings['channel'], version)
+        ident = uuid.uuid4().hex[:16]
+        stage = base / 'staged' / ident
+        stage.mkdir(parents=True, mode=0o700)
+        revision = release_commit('v' + release['version'])
+        asset = stage / 'release.zip'
+        download_release_asset(release, asset, release['version'])
         source = stage / 'source'
         source.mkdir()
-        unpack(stage / 'source.tar.gz', source)
-        return plan_source(home, source, revision, stage)
+        unpack_zip(asset, source)
+        plan = plan_source(home, source, revision, stage)
+        plan['version'] = read_json(source / 'MANIFEST.json')['version']
+        current_version = read_json(path_at(home, 'MANIFEST.json')).get('version')
+        try:
+            plan['downgrade'] = compare_versions(plan['version'], current_version) < 0
+        except (TypeError, ValueError):
+            shutil.rmtree(stage, ignore_errors=True)
+            raise UpdateError('Не удалось безопасно сравнить текущую и выбранную версии.') from None
+        plan['current_version'] = current_version
+        if plan['version'] != release['version']:
+            shutil.rmtree(stage, ignore_errors=True)
+            raise UpdateError('Версия манифеста не совпала с тегом GitHub Release.')
+        plan['release_name'] = str(release.get('name') or '')[:200]
+        plan['release_body'] = str(release.get('body') or '')[:12000]
+        plan['channel'] = release['channel']
+        json_write(stage / 'plan.json', plan)
+        return plan
 
 
 def get_plan(home, ident):
@@ -276,6 +511,19 @@ def get_plan(home, ident):
     plan = read_json(path_at(stage, 'plan.json'))
     if plan['id'] != ident or time.time() - plan['created'] > 3600:
         raise UpdateError('Проверка устарела. Сначала проверь обновления ещё раз.')
+    current_settings = update_settings(home)
+    if current_settings['paused']:
+        raise UpdateError('Проверка обновлений приостановлена владельцем.')
+    if plan.get('channel') is None:
+        if current_settings['channel'] is not None:
+            raise UpdateError('Канал изменился после проверки. Проверь обновление заново.')
+    else:
+        if (current_settings['channel'] is None
+                or CHANNELS.index(plan['channel']) > CHANNELS.index(current_settings['channel'])):
+            raise UpdateError('Выбранный канал изменился после проверки. Проверь обновление заново.')
+        if (current_settings['version_pin'] is not None
+                and current_settings['version_pin'] != plan.get('version')):
+            raise UpdateError('Закреплённая версия изменилась после проверки.')
     for name, item in plan['changes'].items():
         if not managed(name):
             raise UpdateError('Защищённый путь в плане обновления.')
@@ -495,7 +743,9 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--home', type=Path, default=ROOT)
     sub = ap.add_subparsers(dest='command', required=True)
-    sub.add_parser('check')
+    check = sub.add_parser('check')
+    check.add_argument('--version', help='проверить конкретную версию выбранного канала')
+    sub.add_parser('releases', help='список релизов, допустимых выбранному каналу')
     req = sub.add_parser('request')
     req.add_argument('id')
     req.add_argument('--yes', action='store_true', required=True)
@@ -512,9 +762,20 @@ def main():
     home = args.home.expanduser().resolve()
     os.umask(0o077)
     if args.command == 'check':
-        plan = prepare(home)
+        plan = prepare(home, args.version)
         print(json.dumps({'id': plan['id'], 'revision': plan['revision'],
+                          'version': plan.get('version'),
+                          'channel': plan.get('channel'),
+                          'downgrade': plan.get('downgrade', False),
                           'changed': list(plan['changes'])}, ensure_ascii=False))
+    elif args.command == 'releases':
+        settings = update_settings(home)
+        if settings['channel'] is None:
+            raise UpdateError('Сначала выбери канал обновлений.')
+        releases = eligible_releases(list_releases(), settings['channel'])
+        print(json.dumps([{'version': item['version'], 'channel': item['channel'],
+                           'name': item.get('name'), 'published_at': item.get('published_at')}
+                          for item in releases[:20]], ensure_ascii=False))
     elif args.command == 'request':
         print('Обновление запрошено; мод дождётся завершения задач.' if request(home, args.id) else 'Обновлений нет.')
     elif args.command == '_worker':
@@ -539,7 +800,9 @@ def main():
         print('Код сохранён. Запуск и проверка бота выполняются отдельно.')
     else:
         txn_path = workspace(home) / 'transaction.json'
-        print(json.dumps(read_json(txn_path) if txn_path.exists() else {'status': 'no_updates'}, ensure_ascii=False))
+        txn = read_json(txn_path) if txn_path.exists() else {'status': 'no_updates'}
+        txn['update_settings'] = update_settings(home)
+        print(json.dumps(txn, ensure_ascii=False))
 
 
 if __name__ == '__main__':

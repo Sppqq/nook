@@ -10,8 +10,12 @@
 
 `bin/` contains agent and owner tools. `setup/` contains an optional root helper and owner API clients. `antigravity_limits.py` reads provider quota information. `.agents/skills/` contains tool instructions.
 
-`templates/runtime/` contains only empty initial files. The installer creates local data from those templates, renders installation paths, and writes private configuration. Git ignores working data. Provider credentials are configured independently.
+`templates/runtime/` contains only empty initial files. The installer creates local data from those templates, renders installation paths, and writes private configuration. Runtime and credential paths beside a source checkout are excluded from source validation and copying; they are not release assets. Git ignores working data. Provider credentials are configured independently.
 
 `tools/build_release.py` reads Git's explicit file list, checks the composition, rebuilds `MANIFEST.json`, and writes ZIP/JSON bundles and checksums to ignored `dist/`. `bootstrap.sh` downloads one GitHub source snapshot, rejects unsafe archive entries, and runs the wizard using `/dev/tty`. The wizard verifies `MANIFEST.json` before installing. Git clone installation remains available.
+
+`release_channels.py` implements SemVer precedence and the per-channel prerelease policy. `nook_update.py` preserves legacy `main` updates until an owner selects a release channel; selected releases require a GitHub Release SHA-256 asset digest and are staged against pinned source hashes. `mods/update_manager.py` exposes channel, pin, changelog and confirmation controls through the mod API.
+
+`backup_manager.py` creates private source/runtime archives with a per-file integrity manifest and a narrow allowlist of external Codex/Antigravity credentials and sessions. Restore validates the archive and writes only to a new directory; provider files remain under `provider-home/` for owner-reviewed manual placement and never replace the active credentials.
 
 `nook_peers.py` and `mods/peer_chat.py` exchange per-pair HMAC-signed envelopes over existing SSH. Receivers verify expiry, signatures, replay IDs, and rate limits before writing a private SQLite inbox. The mod batches owner notifications and can produce one text-only Mercury reply per original message. Incoming correspondence never enters the command queue. See `docs/PEERS.md`.

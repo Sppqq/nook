@@ -24,7 +24,7 @@ Run with Python 3.11+ in an isolated environment:
 python -m pip install -r requirements.txt
 python -m unittest discover -s tests -v
 python setup/nook-api/test_api.py
-python tools/smoke_runtime.py
+python -m tools.smoke_runtime
 python tools/build_release.py
 bash -n bootstrap.sh install.sh setup/install-root.sh
 bash install.sh --check

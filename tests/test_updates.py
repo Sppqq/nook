@@ -10,6 +10,7 @@ import shutil
 import tarfile
 import tempfile
 import time
+import zipfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -253,6 +254,137 @@ class UpdateTests(unittest.TestCase):
         u.json_write(self.source / 'MANIFEST.json', manifest)
         with self.assertRaisesRegex(u.UpdateError, 'манифест'):
             self.plan()
+
+    def test_existing_install_defaults_to_legacy_without_writing_settings(self):
+        settings_path = u.workspace(self.home) / 'settings.json'
+        self.assertEqual(u.update_settings(self.home)['channel'], None)
+        self.assertFalse(settings_path.exists())
+        settings = u.save_update_settings(self.home, channel='beta', version_pin='1.2.0-beta.1')
+        self.assertEqual(settings['channel'], 'beta')
+        self.assertEqual(settings['version_pin'], '1.2.0-beta.1')
+        self.assertFalse(settings['paused'])
+        self.assertEqual(u.save_update_settings(
+            self.home, clear_version_pin=True, paused=True)['version_pin'], None)
+        self.assertTrue(u.update_settings(self.home)['paused'])
+
+    def test_update_settings_reject_invalid_values_and_symlink(self):
+        with self.assertRaisesRegex(u.UpdateError, 'канал'):
+            u.save_update_settings(self.home, channel='preview')
+        with self.assertRaisesRegex(u.UpdateError, 'версия'):
+            u.save_update_settings(self.home, version_pin='1.2.0-preview.1')
+        path = u.workspace(self.home) / 'settings.json'
+        path.symlink_to(self.root / 'outside')
+        with self.assertRaisesRegex(u.UpdateError, 'ссылка'):
+            u.update_settings(self.home)
+
+    def test_release_tag_resolution_pins_annotated_tag_to_commit(self):
+        commit = 'c' * 40
+        responses = [
+            {'object': {'type': 'tag', 'sha': 'a' * 40}},
+            {'object': {'type': 'commit', 'sha': commit}},
+        ]
+        with patch.object(u, 'github_json', side_effect=responses) as fetch:
+            self.assertEqual(u.release_commit('v1.2.0'), commit)
+        self.assertIn('/git/ref/tags/v1.2.0', fetch.call_args_list[0].args[0])
+
+    def test_tag_resolution_rejects_non_commit_and_bad_sha(self):
+        with patch.object(u, 'github_json', return_value={'object': {'type': 'blob', 'sha': 'x'}}):
+            with self.assertRaisesRegex(u.UpdateError, 'неизменяемый'):
+                u.release_commit('v1.2.0')
+
+    def test_release_asset_requires_github_digest_and_pinned_url(self):
+        release = {'assets': [{
+            'name': 'nook-1.2.0.zip',
+            'digest': 'sha256:' + 'a' * 64,
+            'browser_download_url': 'https://github.com/Sppqq/nook/releases/download/v1.2.0/nook-1.2.0.zip',
+        }]}
+        with patch.object(u.urllib.request, 'urlopen') as fetch:
+            with self.assertRaisesRegex(u.UpdateError, 'SHA-256'):
+                u.download_release_asset({'assets': [{
+                    **release['assets'][0], 'digest': None}]}, self.root / 'archive.zip', '1.2.0')
+            fetch.assert_not_called()
+        with patch.object(u.urllib.request, 'urlopen') as fetch:
+            with self.assertRaisesRegex(u.UpdateError, 'Ссылка'):
+                u.download_release_asset({'assets': [{
+                    **release['assets'][0], 'browser_download_url': 'https://evil.test/archive.zip'
+                }]}, self.root / 'archive.zip', '1.2.0')
+            fetch.assert_not_called()
+
+    def test_release_asset_checks_bytes_and_redirect_host(self):
+        payload = b'archive bytes'
+        release = {'assets': [{
+            'name': 'nook-1.2.0.zip',
+            'digest': 'sha256:' + hashlib.sha256(payload).hexdigest(),
+            'browser_download_url': 'https://github.com/Sppqq/nook/releases/download/v1.2.0/nook-1.2.0.zip',
+        }]}
+
+        class Response(io.BytesIO):
+            def __init__(self, data, final_url):
+                super().__init__(data)
+                self.final_url = final_url
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                self.close()
+            def geturl(self):
+                return self.final_url
+
+        target = self.root / 'asset.zip'
+        with patch.object(u.urllib.request, 'urlopen', return_value=Response(
+                payload, 'https://release-assets.githubusercontent.com/download')) as fetch:
+            u.download_release_asset(release, target, '1.2.0')
+        self.assertEqual(target.read_bytes(), payload)
+        request = fetch.call_args.args[0]
+        self.assertEqual(request.full_url, release['assets'][0]['browser_download_url'])
+        with patch.object(u.urllib.request, 'urlopen', return_value=Response(
+                payload, 'https://evil.test/download')):
+            with self.assertRaisesRegex(u.UpdateError, 'недоверенный адрес'):
+                u.download_release_asset(release, self.root / 'redirect.zip', '1.2.0')
+
+    def test_release_update_selects_channel_and_checks_manifest_version(self):
+        version = '1.2.0-beta.1'
+        installed_manifest = u.read_json(self.home / 'MANIFEST.json')
+        installed_manifest['version'] = '1.3.0-beta.1'
+        u.json_write(self.home / 'MANIFEST.json', installed_manifest)
+        u.record_install(self.home)
+        manifest = {'format': 1, 'update_api': 1, 'version': version,
+                    'sha256': {name: u.digest((self.source / name).read_bytes())
+                               for name in self.files}}
+        u.json_write(self.source / 'MANIFEST.json', manifest)
+        archive = self.root / 'release.zip'
+        with zipfile.ZipFile(archive, 'w') as bundle:
+            for path in self.source.rglob('*'):
+                if path.is_file():
+                    bundle.write(path, path.relative_to(self.source).as_posix())
+        release = {'tag_name': 'v' + version, 'prerelease': True, 'draft': False,
+                   'name': 'test beta', 'body': 'Test changes'}
+        u.save_update_settings(self.home, channel='beta')
+
+        def asset_download(item, destination, selected):
+            self.assertEqual(selected, version)
+            shutil.copyfile(archive, destination)
+
+        with patch.object(u, 'list_releases', return_value=[release]), \
+                patch.object(u, 'release_commit', return_value='c' * 40), \
+                patch.object(u, 'download_release_asset', side_effect=asset_download):
+            plan = u.prepare(self.home)
+        self.assertEqual(plan['version'], version)
+        self.assertEqual(plan['channel'], 'beta')
+        self.assertEqual(plan['revision'], 'c' * 40)
+        self.assertEqual(plan['release_name'], 'test beta')
+        self.assertTrue(plan['downgrade'])
+        self.assertEqual(plan['current_version'], '1.3.0-beta.1')
+        u.save_update_settings(self.home, channel='stable')
+        with self.assertRaisesRegex(u.UpdateError, 'канал изменился'):
+            u.request(self.home, plan['id'])
+        self.assertFalse((u.workspace(self.home) / 'request.json').exists())
+
+    def test_release_archive_rejects_traversal(self):
+        archive = self.root / 'unsafe.zip'
+        with zipfile.ZipFile(archive, 'w') as bundle:
+            bundle.writestr('../escape', 'x')
+        with self.assertRaises(u.UpdateError):
+            u.unpack_zip(archive, self.root / 'unzipped')
 
     def test_rendering_helper_survives_installer_render(self):
         # The installer replaces placeholders even in Python source. The helper

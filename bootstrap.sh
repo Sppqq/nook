@@ -21,12 +21,34 @@ nook_stage="$(mktemp -d -t nook-install.XXXXXXXX)"
 cleanup() { rm -rf -- "$nook_stage"; }
 trap cleanup EXIT
 printf '%s\n' '  ↓ Загружаю исходники с GitHub…'
-python3 - "$nook_stage" <<'PY_SOURCE'
+python3 - "$nook_stage" "$@" <<'PY_SOURCE'
 from pathlib import Path, PurePosixPath
-import shutil, sys, tarfile, urllib.request
+import re, shutil, sys, tarfile, urllib.parse, urllib.request
 stage = Path(sys.argv[1])
+args = sys.argv[2:]
+version = None
+i = 0
+while i < len(args):
+    arg = args[i]
+    if arg == '--version':
+        i += 1
+        if i >= len(args) or version is not None:
+            raise SystemExit('--version requires one version and may be used only once.')
+        version = args[i]
+    elif arg.startswith('--version='):
+        if version is not None:
+            raise SystemExit('--version may be used only once.')
+        version = arg.split('=', 1)[1]
+    i += 1
+if version is not None and not re.fullmatch(
+        r'(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)'
+        r'(?:-(?:0|[1-9]\d*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)'
+        r'(?:\.(?:0|[1-9]\d*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*)?'
+        r'(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?', version):
+    raise SystemExit('Некорректная SemVer-версия.')
 archive = stage / 'source.tar.gz'
-url = 'https://codeload.github.com/Sppqq/nook/tar.gz/refs/heads/main'
+ref = 'refs/heads/main' if version is None else 'refs/tags/v' + version
+url = 'https://codeload.github.com/Sppqq/nook/tar.gz/' + urllib.parse.quote(ref, safe='/')
 with urllib.request.urlopen(url, timeout=120) as response, archive.open('wb') as output:
     size = 0
     while chunk := response.read(65536):

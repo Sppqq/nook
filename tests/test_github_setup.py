@@ -77,9 +77,9 @@ class GitHubTests(unittest.TestCase):
             return subprocess.run([str(wrapper), *args], env=env, cwd=self.home,
                                   check=True, capture_output=True, text=True, **kwargs).stdout.strip()
         run('init', '-q', 'repo')
-        run('-C', 'repo', 'commit', '--allow-empty', '-m', 'Identity check')
-        self.assertEqual(run('-C', 'repo', 'log', '-1', '--format=%an <%ae>'),
-                         'test-agent <123+test-agent@users.noreply.github.com>')
+        expected = 'test-agent <123+test-agent@users.noreply.github.com> '
+        self.assertTrue(run('-C', 'repo', 'var', 'GIT_AUTHOR_IDENT').startswith(expected))
+        self.assertTrue(run('-C', 'repo', 'var', 'GIT_COMMITTER_IDENT').startswith(expected))
         self.assertFalse((self.home / 'global.gitconfig').exists())
         self.assertFalse((self.home / '.git-credentials').exists())
         helper = self.home / 'bin/github-credential'

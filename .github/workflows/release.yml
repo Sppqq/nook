@@ -1,0 +1,55 @@
+name: Verified release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.ref }}
+          fetch-depth: 0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+      - name: Verify tag, version and release notes
+        run: |
+          test "${GITHUB_REF_NAME}" = "v$(tr -d '\n' < VERSION)"
+          python tools/release_notes.py "$GITHUB_REF_NAME" > "$RUNNER_TEMP/release-notes.md"
+      - name: Run release checks
+        run: |
+          python -m pip install -r requirements.txt
+          python -m unittest discover -s tests -v
+          python setup/nook-api/test_api.py
+          python -m tools.smoke_runtime
+          bash -n bootstrap.sh install.sh setup/install-root.sh
+          bash install.sh --check
+          git diff --exit-code
+      - name: Build and verify release assets
+        run: |
+          python tools/build_release.py
+          git diff --exit-code -- MANIFEST.json
+          (cd dist && sha256sum -c SHA256SUMS)
+      - name: Publish tagged release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          if [[ "$version" == *-* ]]; then
+            gh release create "$GITHUB_REF_NAME" dist/nook-"$version".zip dist/source.json dist/SBOM.spdx.json dist/SHA256SUMS \
+              --verify-tag --prerelease --title "Nook $GITHUB_REF_NAME" --notes-file "$RUNNER_TEMP/release-notes.md"
+          else
+            gh release create "$GITHUB_REF_NAME" dist/nook-"$version".zip dist/source.json dist/SBOM.spdx.json dist/SHA256SUMS \
+              --verify-tag --title "Nook $GITHUB_REF_NAME" --notes-file "$RUNNER_TEMP/release-notes.md"
+          fi

@@ -8,7 +8,7 @@ Nook is a self-hosted Telegram assistant that helps you look after a Linux serve
 
 [Русская инструкция](docs/README.ru.md) · [Security](SECURITY.md) · [Contributing](CONTRIBUTING.md) · [MIT license](LICENSE)
 
-> **Early preview — 0.1.1.** The Telegram interface and installation wizard are currently in Russian. Documentation is available in English and Russian. Full installation of this renamed release on a fresh VPS has not yet been verified; use a separate test server first.
+> **Early preview — Alpha candidate `0.1.2-alpha.1` (not published).** The Telegram interface and installation wizard are currently in Russian. Documentation is available in English and Russian. Full installation of this renamed release on a fresh VPS has not yet been verified; use a separate test server first.
 
 Changes in this release: [changelog](docs/CHANGELOG.md).
 
@@ -89,7 +89,13 @@ Install with one command from an interactive SSH terminal:
 curl -fsSL https://raw.githubusercontent.com/Sppqq/nook/main/bootstrap.sh | bash
 ```
 
-The wizard offers a provider preset, optional voice recognition, a configuration preview, hidden token entry, and progress indicators. It downloads a coherent GitHub snapshot and checks its manifest before installing. To inspect the source first:
+The wizard offers a provider preset, optional voice recognition, a channel choice (Stable by default), an optional pin to the exact downloaded source version, a configuration preview, hidden token entry, and progress indicators. Select a channel and, when needed, fetch an exact source version explicitly:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Sppqq/nook/main/bootstrap.sh | bash -s -- --channel beta --version 1.2.0-beta.1
+```
+
+`--version` must match the source tag being downloaded. Bootstrap downloads `v<version>`; `--channel` sets the instance's future update policy and does not change an existing instance. Without `--version`, bootstrap uses the current `main` snapshot. The installer checks the manifest before installing. To inspect the source first:
 
 ```bash
 git clone https://github.com/Sppqq/nook.git
@@ -114,6 +120,7 @@ Open your bot in Telegram after setup. Do not run two instances with the same Te
 
 ```bash
 bash install.sh --timezone Europe/London
+bash install.sh --channel beta --version 1.2.0-beta.1
 bash install.sh --target "$HOME/my-nook"
 bash install.sh --skip-antigravity --skip-mercury  # Codex only
 bash install.sh --skip-codex --skip-antigravity    # Mercury only
@@ -121,6 +128,10 @@ bash install.sh --voice                           # Local voice recognition
 bash install.sh --no-start                        # Prepare without starting
 bash install.sh --no-system-packages              # OS packages already installed
 ```
+
+`--channel` accepts `stable`, `rc`, `beta`, `alpha` or `nightly`; `--version` pins only when it matches the local checked-out `VERSION`. The fresh installer never reconfigures an existing installation.
+
+Use Telegram **Ещё → Моды → Обновления и резервные копии** to inspect channels, releases, pins and update checks. `bin/nook-backup create` creates and verifies a local archive; `bin/nook-backup restore ARCHIVE --to NEW_DIRECTORY` verifies and restores to a new directory without replacing a live instance. Archives include local secrets and a narrow allowlist of external provider credentials/session history; they must be kept private. Provider files restore under `provider-home/` for owner-reviewed placement. See [release policy](RELEASE_POLICY.md) and [update/recovery guide](docs/UPDATES.md).
 
 Codex is the default preset. If you choose only another provider, the installer selects it as the initial model. Use `--yes` to keep CLI flags and skip the preset menu and plan confirmation; account logins remain interactive. Each provider requires your own account; subscriptions, quotas, or API charges may apply. For unattended key entry, `--mercury-key-file` accepts a private local file.
 
