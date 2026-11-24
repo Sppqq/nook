@@ -7,7 +7,8 @@
   started. The public data does not justify attributing this to fork approval.
 - Scheduled work records durable claims before dispatch. Interrupted or
   ambiguous occurrences remain for operator review. A recurring job stays
-  held until its unresolved claim is closed.
+  held until its unresolved claim is closed. A provider limit or other
+  failed result leaves the claim unresolved and skips automatic replay.
 - A real aiogram dispatch test covers owner-only channel switching, rejection
   of group/foreign callbacks, and an empty release channel.
 - Mercury previously buffered the full stdout and could exceed its request
@@ -20,6 +21,10 @@
   `main` revision and has no independent publisher identity. Managed
   channels verify provenance. A prompt and the installed mod registry do
   not isolate arbitrary code from secrets accessible to the service UID.
+- The optional root helper now consumes request IDs in a root-owned audit
+  journal, rejecting duplicate invocations and anchoring spool writes to an
+  open directory. It still treats the service account as fully trusted.
+  Existing privileged installations were not changed.
 - PR #7 is open against `dev` at `8e70a28`. Its two Checks runs reported
   `action_required` with no jobs in the public API. GitHub reports two
   historical releases and marks both as prereleases.
@@ -72,6 +77,32 @@
 - Three isolated runs of the bot import and chart smoke program took
   4.04, 3.56 and 3.70 seconds. This measures startup/import and chart work
   in Ubuntu WSL, with Telegram polling and provider requests disabled.
+
+### Iteration 4 controlled resource measurements
+
+Ubuntu 24.04 WSL2, Python 3.12.3, systemd scopes with swap disabled.
+Each row used three runtime smoke launches and a 10-second queue load:
+
+| MemoryMax | Import and 3 charts, median | Runtime peak RSS | CPU over 3 launches | Durable jobs/s | Claim p95 |
+|---|---:|---:|---:|---:|---:|
+| 512 MiB | 4.37 s | 225.7 MiB | 12.38 s | 180.86 | 7.73 ms |
+| 1 GiB | 4.42 s | 225.9 MiB | 13.10 s | 219.46 | 5.17 ms |
+| 2 GiB | 4.03 s | 225.8 MiB | 12.04 s | 224.75 | 5.03 ms |
+
+Queue peak RSS was 22.9–23.0 MiB. These are workload measurements with
+temporary files, no external provider calls and no long-running VPS.
+They test memory ceilings for these scenarios alone.
+
+A separate 60-second run under 512 MiB processed 13,952 queue events
+at 232.25 jobs/s, with 5.19 ms p95, 9.62 CPU seconds and 23.2 MiB peak
+queue RSS. This exercised claim and completion I/O without provider work.
+
+The iteration 4 unit suite passed 149 tests. Branch-aware measurement
+reported 38% overall, 15% in `bot.py`, 100% in
+`telegram_gateway.py`, 80% in `job_scheduler.py`, and 83% in
+`tool_executor.py`. The optional root helper measured 39%. The prior
+baselines were 28% overall and 1% in `bot.py`. The 90% core and 95%
+critical-security targets remain open.
 
 ## Historical Stage 0 and iteration 2 baseline
 

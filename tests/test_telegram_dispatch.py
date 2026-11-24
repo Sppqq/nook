@@ -2,6 +2,7 @@
 import importlib.util
 import asyncio
 import json
+import os
 from pathlib import Path
 import shutil
 import tempfile
@@ -11,6 +12,7 @@ from unittest.mock import AsyncMock, patch
 from aiogram.types import CallbackQuery, Update
 
 from nook_update import update_settings
+import job_scheduler
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -21,8 +23,10 @@ class TelegramDispatchTests(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(work.cleanup)
         self.home = Path(work.name)
         (self.home / 'config.json').write_text(json.dumps({'bot_token': '123456:' + 'X' * 35, 'owner_id': 7}))
-        sandbox = {'__file__': str(self.home / 'bot.py'), '__name__': 'disposable_nook'}
-        exec(compile((ROOT / 'bot.py').read_text(), str(ROOT / 'bot.py'), 'exec'), sandbox)
+        bot_path = ROOT / 'bot.py'
+        sandbox = {'__file__': str(bot_path), '__name__': 'disposable_nook'}
+        with patch.dict(os.environ, {'NOOK_HOME': str(self.home)}):
+            exec(compile(bot_path.read_text(), str(bot_path), 'exec'), sandbox)
         self.runtime = sandbox
         self.addAsyncCleanup(self.runtime['bot'].session.close)
         mod_path = self.home / 'mods' / 'update_manager.py'
@@ -91,3 +95,16 @@ class TelegramDispatchTests(unittest.IsolatedAsyncioTestCase):
         self.runtime['mercury_chat'] = stalled
         _, _, error = await asyncio.wait_for(self.runtime['run_mercury']('test', timeout=0.04), 1)
         self.assertIn('таймаут', error)
+
+    async def test_scheduled_provider_error_keeps_claim_and_prevents_fallback(self):
+        queue = self.home / 'spool/jobs.json'
+        job_scheduler.write(queue, [{'id': 'task', 'at': 1, 'every': 120, 'prompt': 'check'}])
+        job, = job_scheduler.take_due(queue, now=1)
+        self.runtime['run_agent'] = AsyncMock(return_value=(None, '', 'Codex rate limit'))
+        self.runtime['pause_for_limit'] = AsyncMock()
+        self.runtime['limits_note'] = AsyncMock(return_value='')
+        self.runtime['send'] = AsyncMock(return_value=50)
+        await self.runtime['execute_scheduled'](job)
+        self.runtime['pause_for_limit'].assert_not_awaited()
+        self.assertIn(job['claim_id'], job_scheduler.unresolved(queue))
+        self.assertEqual(job_scheduler.take_due(queue, now=122), [])

@@ -18,10 +18,12 @@ import uuid
 from base64 import b64encode
 from urllib.request import Request, urlopen
 
+HOME = os.path.abspath(os.environ.get("NOOK_HOME") or os.path.dirname(__file__))
+
 if __name__ == '__main__':
     from tools.start_guard import recover
 
-    if recover(Path(__file__).resolve().parent):
+    if recover(Path(HOME).resolve()):
         os.execv(sys.executable, [sys.executable, *sys.argv])
 
 import aiohttp
@@ -43,7 +45,6 @@ from aiogram.filters import Command, CommandObject
 from aiogram.types import (BotCommand, CallbackQuery, FSInputFile, InlineKeyboardButton,
                            InlineKeyboardMarkup, Message)
 
-HOME = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(HOME, "config.json")
 STATE_PATH = os.path.join(HOME, "state.json")
 OUTBOX = os.path.join(HOME, "spool", "outbox")
@@ -861,6 +862,8 @@ async def run_mercury(prompt, thread_id=None, images=(), on_step=None, run: Run 
     except Exception as e:
         log.warning("Mercury execution failed: %s", type(e).__name__)
         err = "Mercury: не удалось выполнить запрос."
+    if shell.uncertain_commands and not err:
+        err = "Исход команды неизвестен. Проверь результат перед повтором."
     # длинные разговоры: системный + хвост не больше ~60 сообщений и ~120k символов (≈35k токенов)
     tail, size = [], 0
     for mm in reversed(msgs[1:]):
@@ -1392,7 +1395,7 @@ async def resume_loop():
 
 async def run_task(lane: Lane, prompt, *, thread_id=None, images=(), title=E("busy") + " думаю",
                    reply_to=None, show_progress=True, background=False, set_main=False,
-                   header="", incident=None, task=None, resumed=False):
+                   header="", incident=None, task=None, resumed=False, report_success=False):
     """Выполнить задачу в очереди lane и отправить результат хозяину."""
     chat = STATE["owner_id"]
     if not chat:
@@ -1440,7 +1443,7 @@ async def run_task(lane: Lane, prompt, *, thread_id=None, images=(), title=E("bu
             STATE["main_thread"] = tid
             STATE["main_at"] = time.time()
             save_state()
-        if err and engine == "codex" and LIMIT_RE.search(err) and not run.cancelled:
+        if err and engine == "codex" and LIMIT_RE.search(err) and not run.cancelled and not report_success:
             # лимит кончился посреди задачи: запомнить и продолжить после сброса, а пока — Mercury
             await pause_for_limit(dict(lane=lane.name, prompt=prompt, thread=tid or thread_id, title=title,
                                        background=background, header=header, task=task, reply_to=reply_to,
@@ -1448,7 +1451,7 @@ async def run_task(lane: Lane, prompt, *, thread_id=None, images=(), title=E("bu
             return tid
         if background and not err and (not final or SILENT_RE.match(final)):
             log.info("bg task silent: %s", prompt[:80])
-            return tid
+            return not run.cancelled if report_success else tid
         text = header + (final or "")
         if err:
             text += f"\n\n{E('err')} {err}"
@@ -1480,7 +1483,7 @@ async def run_task(lane: Lane, prompt, *, thread_id=None, images=(), title=E("bu
             for k in list(trim)[:-100]:
                 del trim[k]
             save_state()
-        return tid
+        return not err and not run.cancelled if report_success else tid
 
 
 # ---------------------------------------------------------------- меню
@@ -5119,7 +5122,11 @@ async def execute_scheduled(job):
                       f"{', повторяется' if job.get('every') else ''}]\n{job['prompt']}\n\n"
                       "Выполни. Если это напоминание или поручение хозяина — обязательно напиши ему "
                       "(коротко, по делу). Если это твоя служебная проверка и сказать нечего — ответь SILENT.")
-            await run_task(bg_lane, prompt, background=True, show_progress=False, header=E("jobs") + " ")
+            known = await run_task(bg_lane, prompt, background=True, show_progress=False,
+                                   header=E("jobs") + " ", report_success=True)
+            if not known:
+                log.warning("scheduled task %s requires review", job["id"])
+                return
         await asyncio.to_thread(job_scheduler.complete, JOBS, job["claim_id"])
     except Exception:
         log.exception("scheduled task %s requires review", job["id"])

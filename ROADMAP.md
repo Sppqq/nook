@@ -11,10 +11,14 @@
   duplicate tool-ID handling and retry suppression after uncertain outcomes.
   The Linux benchmark measures startup/import, chart rendering and the
   persistent queue without provider calls.
+- Initial 512 MiB / 1 GiB / 2 GiB cgroup benchmarks are recorded in the audit.
+  Separate provider and long-running VPS measurements remain pending.
 - Next core work: provider/session separation, direct tests for the
   remaining Telegram handlers, and OS-isolated validation and activation
   of locally developed mods. Cross-version delegated tasks and full
   bilingual UI remain open.
+- Iteration 4 measured 38% overall coverage and 15% for `bot.py`, up from
+  28% and 1%. The core and critical-security coverage targets remain open.
 - Restored PR #7 exactly at `8e70a28` and retained its history in a verified
   local Git bundle. The owner-supplied source ZIP matches all 108 tracked files.
 - Implemented manual candidate preparation, Sigstore provenance checks in

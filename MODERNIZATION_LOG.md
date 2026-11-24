@@ -15,6 +15,18 @@
   checks for provider wait and persisted sessions.
 - Added a disposable Linux benchmark for startup, CPU, peak RSS and
   sustained durable queue work.
+- Made the optional root helper claim request IDs once in root-owned
+  storage, anchored its spool I/O to a directory descriptor, and tested
+  concurrent consumption and unsafe links without running root commands.
+- Ran the WSL benchmark under 512 MiB, 1 GiB and 2 GiB cgroup limits
+  with swap disabled. Also verified that the official GitHub CLI 2.45.0
+  is rejected by the Sigstore capability check.
+- Kept claims unresolved when the actual scheduled provider run reports
+  a failed or uncertain operation, including the Codex limit path that
+  normally queues a retry for interactive tasks.
+- Passed 149 tests, 3 owner API checks, real chart rendering, installer
+  checks, reproducible Alpha composition and local actionlint. Direct bot
+  coverage reached 15% and the measured total reached 38%.
 
 ## 2026-11-24 — Iteration 3
 
