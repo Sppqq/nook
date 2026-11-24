@@ -38,6 +38,7 @@ import job_scheduler
 from agent_process import read_tail, stop_process_group
 from telegram_gateway import owner_message, private_callback, private_sender, valid_pair_code
 from tool_executor import ShellCalls
+from provider_sessions import is_mercury_thread, resume_for_engine
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
@@ -518,6 +519,7 @@ class Run:
         self.cancelled = False
         self.started = time.time()
         self.antigravity_model = None
+        self.effects_possible = False
 
     def cancel(self):
         self.cancelled = True
@@ -659,6 +661,8 @@ async def run_codex(prompt, thread_id=None, images=(), on_step=None, run: Run = 
                 RUN_THREADS[run_id] = new_thread
             elif et in ("item.started", "item.completed"):
                 item = ev.get("item", {})
+                if item.get("type") not in {"reasoning", "agent_message", "todo_list"}:
+                    run.effects_possible = True
                 if et == "item.completed" and item.get("type") == "agent_message":
                     last_msg = item.get("text", "")
                 if on_step:
@@ -736,10 +740,6 @@ SHELL_TOOL = {"type": "function", "function": {
         "cmd": {"type": "string", "description": "bash-команда"},
         "timeout": {"type": "integer", "description": "секунд, по умолчанию 120, максимум 900"}},
         "required": ["cmd"]}}}
-
-
-def is_mercury_thread(tid):
-    return isinstance(tid, str) and re.fullmatch(r"merc-[A-Za-z0-9_-]{1,64}", tid) is not None
 
 
 def mercury_key():
@@ -1085,21 +1085,7 @@ def engine_for(thread_id=None):
 
 async def run_agent(prompt, thread_id=None, images=(), on_step=None, run=None, timeout=USER_TIMEOUT):
     engine = engine_for(thread_id)
-    thread_engine = ("mercury" if is_mercury_thread(thread_id) else
-                     "antigravity" if str(thread_id or "").startswith("agy-") else "codex")
-    if thread_id and thread_engine != engine:
-        # разговор другого движка продолжить нельзя: свой разговор-двойник (xthreads) + прошлый ответ как контекст
-        twin = STATE.get("xthreads", {}).get(thread_id)
-        if twin:
-            twin_engine = ("mercury" if is_mercury_thread(twin) else
-                           "antigravity" if str(twin).startswith("agy-") else "codex")
-            if twin_engine != engine:
-                twin = None
-        if not twin:
-            ctx = STATE.get("last_answer", {}).get(thread_id, "")
-            if ctx:
-                prompt = f"[контекст: твой прошлый ответ в этом разговоре был]\n{ctx[:3000]}\n\n" + prompt
-        thread_id = twin
+    prompt, thread_id = resume_for_engine(prompt, thread_id, engine, STATE)
     if engine == "antigravity":
         return await run_antigravity(prompt, thread_id, images, on_step, run, timeout)
     if engine == "mercury":
@@ -1444,11 +1430,13 @@ async def run_task(lane: Lane, prompt, *, thread_id=None, images=(), title=E("bu
             STATE["main_at"] = time.time()
             save_state()
         if err and engine == "codex" and LIMIT_RE.search(err) and not run.cancelled and not report_success:
-            # лимит кончился посреди задачи: запомнить и продолжить после сброса, а пока — Mercury
-            await pause_for_limit(dict(lane=lane.name, prompt=prompt, thread=tid or thread_id, title=title,
-                                       background=background, header=header, task=task, reply_to=reply_to,
-                                       set_main=set_main, incident=incident, images=list(images)), final)
-            return tid
+            if run.effects_possible:
+                err += "\nКоманда могла уже изменить состояние. Проверь результат перед повтором."
+            else:
+                await pause_for_limit(dict(lane=lane.name, prompt=prompt, thread=tid or thread_id, title=title,
+                                           background=background, header=header, task=task, reply_to=reply_to,
+                                           set_main=set_main, incident=incident, images=list(images)), final)
+                return tid
         if background and not err and (not final or SILENT_RE.match(final)):
             log.info("bg task silent: %s", prompt[:80])
             return not run.cancelled if report_success else tid

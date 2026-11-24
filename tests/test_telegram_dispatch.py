@@ -132,3 +132,44 @@ class TelegramDispatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(store.status('skill', 'example')['active'], '1.0.0')
         await self.dispatch('mod:local_extension_ui:r:skill:example')
         self.assertIsNone(store.status('skill', 'example')['active'])
+
+    async def test_real_codex_stream_stops_failover_after_tool_activity(self):
+        cli = self.home / 'codex-fixture'
+        cli.write_text("""#!/usr/bin/python3
+import json
+import sys
+prompt = sys.stdin.read()
+print(json.dumps({'type': 'thread.started', 'thread_id': 'codex-fixture'}))
+if prompt == 'after-command':
+    print(json.dumps({'type': 'item.started', 'item': {'type': 'command_execution'}}))
+print(json.dumps({'type': 'turn.failed', 'message': 'usage limit'}))
+""")
+        cli.chmod(0o700)
+        (self.home / 'spool').mkdir()
+        self.runtime['CODEX'] = str(cli)
+        self.runtime['pause_for_limit'] = AsyncMock()
+        self.runtime['limits_note'] = AsyncMock(return_value='')
+        self.runtime['send'] = AsyncMock(return_value=50)
+        await self.runtime['run_task'](self.runtime['user_lane'], 'after-command', show_progress=False)
+        self.runtime['pause_for_limit'].assert_not_awaited()
+        self.assertIn('могла уже изменить состояние', str(self.runtime['send'].call_args))
+        await self.runtime['run_task'](self.runtime['user_lane'], 'before-command', show_progress=False)
+        self.runtime['pause_for_limit'].assert_awaited_once()
+
+    async def test_real_antigravity_runner_keeps_provider_conversation(self):
+        cli = self.home / 'agy-fixture'
+        cli.write_text("""#!/usr/bin/python3
+import json
+import sys
+resumed = '--conversation' in sys.argv and 'conversation-fixture' in sys.argv
+print(json.dumps({'event': 'init', 'conversation_id': 'conversation-fixture'}))
+print(json.dumps({'event': 'result', 'result': {'status': 'SUCCESS',
+      'response': 'resumed' if resumed else 'fresh'}}))
+""")
+        cli.chmod(0o700)
+        (self.home / 'spool').mkdir()
+        self.runtime['AGY_BIN'] = str(cli)
+        self.runtime['CFG']['model'] = 'antigravity-argon'
+        ident, answer, error = await self.runtime['run_agent']('hello', timeout=5)
+        self.assertEqual((answer, error), ('fresh', None))
+        self.assertEqual(await self.runtime['run_agent']('follow-up', ident, timeout=5), (ident, 'resumed', None))

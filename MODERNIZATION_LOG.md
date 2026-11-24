@@ -13,6 +13,10 @@
   denied without approval, a broken second revision rolled back to the
   first, and policy revocation prevented further calls. The full stage
   passed 157 tests and 3 owner API checks.
+- Extracted provider-compatible session selection and kept the existing
+  session file formats. Added real CLI fixture tests for Codex tool/limit
+  events and Antigravity conversation resume. Mercury already has direct
+  runtime coverage with an HTTP fixture and actual local subprocesses.
 
 ## 2026-11-24 — Iteration 4
 
@@ -140,3 +144,26 @@ Telegram/systemd install and rollback; independent signature or attestation;
 coverage and performance measurements. Existing GitHub releases are
 prereleases despite stable SemVer tags and are excluded by the strict channel
 rules. No attempt was made to rewrite them.
+
+## Iteration 5 — verified local extension lifecycle and session recovery
+
+- Added `extension_sandbox.py` and `local_extensions.py`: content-addressed
+  SemVer staging, isolated Linux execution, API/compatibility probes,
+  owner-rooted permissions, explicit activation, health checks, rollback and
+  bounded local history. Added owner-only Telegram controls and
+  `docs/LOCAL_EXTENSIONS.md`. Existing trusted modules retain legacy loading
+  unless an owner enables hash policy.
+- Extracted provider-compatible session selection to `provider_sessions.py`.
+  Session transfer uses a bounded prior answer and rejects incompatible twin
+  IDs. Codex limit handling no longer automatically replays a task after a
+  tool event indicates that side effects may have occurred.
+- Verified 161 unit tests, 3 API tests, runtime and renderer smoke, installer
+  source checks, release archive scope and checksums in disposable WSL.
+  Measured branch coverage: 41% total, 19% `bot.py`, 75% sandbox, 63% local
+  extensions, 100% provider session helper.
+- Commit `9890457` is on PR #7. Its Python 3.11/3.12 Actions workflow passed;
+  the PR-specific Python 3.12 job was pending at the last status check.
+  Session changes in this iteration have not yet been pushed or checked by CI.
+- No active instances, production data or credentials were changed. No Alpha
+  tag/release or provenance claim was created. Long-duration/VPS and real
+  provider-account testing remain unavailable.

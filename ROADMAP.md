@@ -5,6 +5,8 @@
 - Iteration 5 implements a separate local extension lifecycle, isolated API v1
   execution, owner policy, versioning, health checks, and automatic rollback.
   Trusted legacy modules can be pinned by hash without migrating their API.
+- Provider session selection now lives outside `bot.py`. Codex failover
+  no longer queues a retry after observed tool activity.
 
 - Iteration 4 extracts Telegram identity checks and durable scheduled-job
   storage. Actual aiogram dispatch and the existing `later` CLI exercise
@@ -179,6 +181,15 @@
   reproducible manifest, archive scope and checksums locally.
 
 ## Next acceptance gates
+
+- Iteration 5 local extensions and provider session/failover changes are
+  implemented and locally verified; send the session stage to PR #7 and
+  verify its Actions jobs before counting it complete.
+- Raise measured meaningful coverage from 41% overall / 19% `bot.py` toward
+  50% / 30%; prioritize direct bot lifecycle and security boundary behavior.
+- Add bounded protocol version/capability negotiation and revocation tests
+  without changing existing peer chat behavior or granting arbitrary remote
+  command execution.
 
 - Validate the release workflow on GitHub with the owner-selected profile;
   test a real disposable Telegram/systemd installation and rollback before

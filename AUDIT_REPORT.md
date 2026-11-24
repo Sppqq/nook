@@ -7,6 +7,11 @@
   and read-only artifact snapshots protect the isolated execution path.
   Secure operation against the service UID itself still depends on OS
   ownership of the broker and the absence of broad sudo grants.
+- Codex may have performed a tool action before reporting a provider
+  limit. Stream events now gate automatic retry and turn this into an
+  explicit review result. Existing scheduled claims remain held when an
+  operation fails. Provider session families and transfer context are
+  validated separately from request execution.
 
 - Iteration 4 confirmed that the PR and push took place in the same
   repository under the same user. Both check suites failed before jobs
@@ -306,3 +311,36 @@ Track implementation and acceptance gates in [ROADMAP.md](ROADMAP.md).
 Priority is to diagnose the single remaining test error, then establish a
 reproducible green baseline before changing release selection or updater
 behavior. No production system or remote repository was modified.
+
+## Iteration 5 verified status (2026-11-24)
+
+PR #7 remains the delivery branch. The repository/head ownership and write
+permission were verified with the owner account; commit `9890457` was pushed
+normally. GitHub Actions for that commit passed on Python 3.11 and 3.12
+([workflow](https://github.com/Sppqq/nook/actions/runs/45476912057)); the PR
+workflow passed on 3.11 and was pending its 3.12 job at last observation.
+These current results supersede the earlier historical “write blocked” notes.
+
+Two local stages are now checked. The extension lifecycle adds staged,
+content-addressed versions, owner-controlled permissions, isolated execution,
+compatibility checks, controlled activation, health checks, rollback and a
+bounded history. The second stage extracts provider session selection and
+prevents automatic Codex limit failover after observable tool activity.
+Validation in disposable WSL `Nook-Test-01a20e56` passes 161 unit tests, 3
+owner API tests, runtime and renderer smoke checks, installer/manifest checks,
+and locally built archive checksum verification. Branch coverage measured on
+the current working tree is 41% overall and 19% for `bot.py`; extension
+sandbox/lifecycle coverage is 75%/63%, and `provider_sessions.py` is 100%.
+These targets (50%/30%) remain open. The lifecycle stage CI commit above has
+green Python 3.11/3.12 jobs; iteration 5 session changes still require their
+own push and CI run.
+
+The WSL sandbox was exercised with host file, socket, environment and home
+access probes, and with a temporary owner policy in the disposable test
+distribution. No VPS endurance, real provider-account load, live Telegram,
+production, or release publication test was performed. Isolated execution
+depends on Linux Bubblewrap and kernel namespaces and fails closed where
+unavailable; compatibility mode remains for existing trusted modules and
+must be explicitly hardened by an owner policy. Full privileged service
+accounts remain a trust-boundary risk. The local Alpha archive is a build
+artifact only; no tag or release was published.
