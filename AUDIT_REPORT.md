@@ -346,8 +346,7 @@ accounts remain a trust-boundary risk. The local Alpha archive is a build
 artifact only; no tag or release was published.
 
 P0 legacy migration is not certified. The updater intentionally refuses
-dependency changes and stops on local source conflicts. The exact published
-`v0.1.0`/`v0.1.1` artifacts were unavailable for disposable migration tests;
-installations without `self_update` cannot receive a Telegram-delivered
-bridge from their current bot. See `docs/UPDATES.md`; do not claim universal
-legacy or modified-install compatibility.
+dependency changes and stops on local source conflicts. Exact `v0.1.0` and
+`v0.1.1` trees were fetched by pinned tag; their original suites passed (22/81)
+in isolated WSL copies. Full upgrade/rollback was not tested. `v0.1.0` has no
+`self_update`. See `docs/UPDATES.md`; do not claim universal compatibility.

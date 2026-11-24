@@ -170,10 +170,9 @@ rules. No attempt was made to rewrite them.
 
 ## Legacy migration check
 
-P0 migration is still open, not completed. The updater stops on changed
-dependency manifests and source conflicts. Exact historical release archives
-and old Telegram update behavior were not available for isolated end-to-end
-tests. Installations without `self_update` cannot receive new code via
-Telegram from their existing process. The prior verified changes are committed
-locally; current credential lookup returns no GitHub credential, so the new
-commit and this note remain local pending a normal push.
+P0 migration remains open. Fetched exact tags `v0.1.0` (`4a4effa`) and
+`v0.1.1` (`5f4a9bf`); their original suites passed (22 and 81 tests) in
+isolated WSL copies. The first has no `self_update`, the second does. Neither
+version's full migration/rollback was tested. Current updater still refuses
+dependency changes and local conflicts. GitHub write credentials remain
+unavailable, so current local commits cannot yet reach PR #7.
