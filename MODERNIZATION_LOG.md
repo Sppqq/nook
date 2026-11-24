@@ -190,4 +190,6 @@ without weakening those checks.
 - Still open: deterministic Telegram bootstrap for v0.1.0, invocation through
   v0.1.1's existing self-updater, and the isolated systemd/dependency/network/
   power-loss compatibility matrix. P0 is not complete and no live service was
-  changed. CI and PR status are reported after this iteration is pushed.
+  changed. Commit `9bf3f79` is on PR #7; both Actions runs passed:
+  [45493890673](https://github.com/Sppqq/nook/actions/runs/45493890673) and
+  [45493878506](https://github.com/Sppqq/nook/actions/runs/45493878506).
