@@ -18,6 +18,7 @@ jobs:
       - run: python setup/nook-api/test_api.py
       - run: python -m tools.smoke_runtime
       - run: python tools/build_release.py
+      - run: python tools/sync_bootstrap.py --check
       - run: bash -n bootstrap.sh install.sh
       - run: bash install.sh --check
       - run: git diff --exit-code -- MANIFEST.json

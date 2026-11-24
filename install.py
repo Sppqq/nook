@@ -21,6 +21,7 @@ import urllib.error
 from zoneinfo import ZoneInfo
 
 from release_channels import CHANNELS, CHANNEL_LABELS, channel_for_version
+from installer_source import choose_channel, install_from_source
 
 SOURCE = Path(__file__).resolve().parent
 RUNTIME_DIRS = {'memory', 'keys', 'spool', 'inbox', 'logs', 'tmp', '.venv'}
@@ -106,19 +107,10 @@ def choose_options(args):
             print('  Введи число от 1 до 3.')
 
 def choose_update_settings(args, source_version):
-    if args.channel is None:
-        if not sys.stdin.isatty() or args.yes:
-            args.channel = 'stable'
-        else:
-            print('  Канал обновлений: 1 — Stable; 2 — Release Candidate; 3 — Beta;')
-            print('                      4 — Alpha; 5 — Nightly / Dev')
-            while True:
-                choice = input('  Канал [1–5, Enter = 1]: ').strip() or '1'
-                if choice in ('1', '2', '3', '4', '5'):
-                    args.channel = CHANNELS[int(choice) - 1]
-                    break
-                print('  Введи число от 1 до 5.')
-    if args.version is None and sys.stdin.isatty() and not args.yes:
+    if getattr(args, 'dev', False) and args.channel is None:
+        args.channel = channel_for_version(source_version)
+    args.channel = choose_channel(args.channel, args.version, args.yes)
+    if not getattr(args, 'dev', False) and args.version is None and sys.stdin.isatty() and not args.yes:
         print('  Проверенная версия исходников: ' + source_version)
         answer = input('  Закрепить именно эту версию? [y/N]: ').strip().lower()
         if answer in ('y', 'yes', 'д', 'да'):
@@ -437,7 +429,7 @@ def setup_service(target, timezone, no_start, path_env):
 
 
 def main():
-    ap = argparse.ArgumentParser(description=__doc__)
+    ap = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     ap.add_argument('--check', action='store_true')
     ap.add_argument('--yes', action='store_true', help='Пропустить выбор набора и подтверждение плана')
     ap.add_argument('--accept-terms', action='store_true', help='Явно принять TERMS.md; --yes не заменяет согласие')
@@ -457,14 +449,14 @@ def main():
     ap.add_argument('--voice', action='store_true')
     ap.add_argument('--timezone', default='Europe/Moscow')
     ap.add_argument('--channel', choices=CHANNELS,
-                    help='канал обновлений новой установки (по умолчанию stable)')
-    ap.add_argument('--version', help='закрепить именно эту версию исходников; должна совпасть с VERSION')
+                    help='канал устанавливаемого релиза и будущих обновлений')
+    ap.add_argument('--version', help='установить и закрепить указанную опубликованную версию')
+    ap.add_argument('--dev', action='store_true', help='установить из текущего локального дерева разработки')
     ap.add_argument('--owner-id', type=int)
     ap.add_argument('--token-file', type=Path)
     args = ap.parse_args()
-    if args.check or not (args.providers_only or args.finish_service or args.github_only):
-        validate(SOURCE)
     if args.check:
+        validate(SOURCE)
         return
     if sys.version_info < (3, 11) or platform.system() != 'Linux':
         raise SystemExit('Нужен Linux и Python 3.11+. Рекомендуется Ubuntu 24.04 или Debian 12+.')
@@ -500,6 +492,12 @@ def main():
         return
     if (target / 'config.json').exists() or (target != SOURCE and target.exists() and any(target.iterdir())):
         raise SystemExit('Папка назначения уже используется. Установка ничего не перезапишет.')
+    if args.dev and args.version is not None:
+        ap.error('--dev и --version несовместимы.')
+    if not args.dev and os.environ.get('NOOK_STAGED_INSTALL') != str(SOURCE):
+        raise SystemExit(install_from_source(sys.argv[1:], channel=args.channel,
+                                             version=args.version, yes=args.yes))
+    validate(SOURCE)
     accept_terms(args)
     choose_options(args)
     try:

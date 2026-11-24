@@ -1,9 +1,25 @@
-# Nook technical audit — initial baseline
+# Nook technical audit
 
-**Status:** preliminary Stage 0 inventory, 2026-11-24. This is not the final
-audit requested in the modernization brief, an independent security review,
-or a production-readiness certification. Findings below are limited to
-repository files and checks actually examined.
+## Current findings
+
+- PR #7 is open against `dev` at `8e70a28`. Its two Checks runs reported
+  `action_required` with no jobs in the public API. GitHub reports two
+  historical releases and marks both as prereleases.
+- The previous workflow could publish Stable from a tag push. The replacement
+  uses manual dispatch on protected `main`, an attested candidate and a
+  separate Stable environment gate. The repository settings still require
+  owner setup and live verification.
+- The previous bootstrap downloaded `main` before selecting a channel. The
+  installer now resolves and verifies the published release first. Both the
+  installer and updater require the signed workflow provenance for releases.
+- Nook runtime GitHub access remains unconfigured in this clone. The desktop
+  CLI reports an invalid token. Public repository reads and local Git identity
+  verification succeeded independently.
+
+## Historical Stage 0 and iteration 2 baseline
+
+The subsequent sections retain the 2026-11-24 audit snapshots as history.
+They describe repository states before the changes listed above.
 
 ## Repository and release state
 

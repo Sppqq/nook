@@ -24,7 +24,7 @@ class ReleaseNotesTests(unittest.TestCase):
         self.assertIn('**Channel:** Stable', text)
         self.assertIn('## Compatibility and migration', text)
         self.assertIn('## Rollback', text)
-        self.assertIn('not a detached signature', text)
+        self.assertIn('provenance.jsonl', text)
 
     def test_tag_and_version_must_match(self):
         with self.assertRaisesRegex(ValueError, 'start with v'):

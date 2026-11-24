@@ -95,7 +95,7 @@ The wizard offers a provider preset, optional voice recognition, a channel choic
 curl -fsSL https://raw.githubusercontent.com/Sppqq/nook/main/bootstrap.sh | bash -s -- --channel beta --version 1.2.0-beta.1
 ```
 
-`--version` must match the source tag being downloaded. Bootstrap downloads `v<version>`; `--channel` sets the instance's future update policy and does not change an existing instance. Without `--version`, bootstrap uses the current `main` snapshot. The installer checks the manifest before installing. To inspect the source first:
+`--channel` selects the newest eligible published release and sets the new instance's future update policy. `--version` installs an exact published version. Both verify Sigstore provenance using a current GitHub CLI (`gh`, no login needed). If the channel is empty, the installer reports the available choices. Use `--dev` to install from the development branch explicitly. To inspect the source first:
 
 ```bash
 git clone https://github.com/Sppqq/nook.git
@@ -129,7 +129,7 @@ bash install.sh --no-start                        # Prepare without starting
 bash install.sh --no-system-packages              # OS packages already installed
 ```
 
-`--channel` accepts `stable`, `rc`, `beta`, `alpha` or `nightly`; `--version` pins only when it matches the local checked-out `VERSION`. The fresh installer never reconfigures an existing installation.
+`--channel` accepts `stable`, `rc`, `beta`, `alpha` or `nightly`. Use `bash install.sh --dev` for the current checkout. The fresh installer never reconfigures an existing installation.
 
 Use Telegram **Ещё → Моды → Обновления и резервные копии** to inspect channels, releases, pins and update checks. `bin/nook-backup create` creates and verifies a local archive; `bin/nook-backup restore ARCHIVE --to NEW_DIRECTORY` verifies and restores to a new directory without replacing a live instance. Archives include local secrets and a narrow allowlist of external provider credentials/session history; they must be kept private. Provider files restore under `provider-home/` for owner-reviewed placement. See [release policy](RELEASE_POLICY.md) and [update/recovery guide](docs/UPDATES.md).
 

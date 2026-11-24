@@ -134,8 +134,18 @@ def build_sbom(root, version):
 
 def build(root=ROOT):
     version = project_version(root)
-    result = subprocess.run(['git', 'ls-files', '-z'], cwd=root, check=True, capture_output=True)
-    names = sorted(set(result.stdout.decode().split('\0')) - {''})
+    result = subprocess.run(['git', 'ls-files', '--stage', '-z'],
+                            cwd=root, check=True, capture_output=True)
+    modes = {}
+    for entry in filter(None, result.stdout.decode().split('\0')):
+        metadata, name = entry.split('\t', 1)
+        mode, _, stage = metadata.split()
+        if stage != '0' or mode not in {'100644', '100755'}:
+            raise ValueError('Unsupported Git index entry: ' + name)
+        modes[name] = mode
+    names = sorted(modes)
+    if 'NOOK_RELEASE.json' in names:
+        raise ValueError('NOOK_RELEASE.json is reserved for build provenance')
     if 'LICENSE' not in names or 'install.py' not in names:
         raise SystemExit('Stage the reviewed source files with git add before building.')
     files = {name: validate_file(root, name) for name in names if name != 'MANIFEST.json'}
@@ -147,14 +157,18 @@ def build(root=ROOT):
     dist.mkdir(exist_ok=True)
     archive = dist / ('nook-' + version + '.zip')
     bundle = {'format': 1, 'version': version, 'files': {}}
+    revision = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip()
     with zipfile.ZipFile(archive, 'w', compression=zipfile.ZIP_DEFLATED) as output:
         for name, data in sorted(files.items()):
-            executable = bool((root / name).stat().st_mode & 0o111)
+            executable = modes[name] == '100755'
             info = zipfile.ZipInfo(name, date_time=(2026, 1, 1, 0, 0, 0))
             info.compress_type = zipfile.ZIP_DEFLATED
             info.external_attr = (0o100755 if executable else 0o100644) << 16
             output.writestr(info, data)
             bundle['files'][name] = {'content': data.decode(), 'sha256': hashlib.sha256(data).hexdigest(), 'executable': executable}
+        info = zipfile.ZipInfo('NOOK_RELEASE.json', date_time=(2026, 1, 1, 0, 0, 0))
+        info.external_attr = 0o100644 << 16
+        output.writestr(info, encode({'version': version, 'revision': revision}))
     (dist / 'source.json').write_bytes(encode(bundle))
     (dist / 'SBOM.spdx.json').write_bytes(build_sbom(root, version))
     (dist / 'SHA256SUMS').write_text(''.join(

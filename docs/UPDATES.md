@@ -2,9 +2,9 @@
 
 ## По-русски
 
-Открой **Ещё → Моды → Обновления и резервные копии** для выбора канала, просмотра доступных релизов, закрепления версии, паузы и настроек уведомлений. **Ещё → Моды → Обновить Nook** и `/update` проверяют выбранный релиз и показывают план; установка требует отдельного подтверждения. При первой установке мастер предлагает канал (Stable по умолчанию) и закрепление проверенной версии скачанных исходников. `bootstrap.sh --version X` загружает точный тег `vX`; он должен подходить выбранному каналу. У старых установок без сохранённого канала прежний режим `main` сохраняется до выбора владельца.
+Открой **Ещё → Моды → Обновления и резервные копии** для выбора канала, просмотра доступных релизов, закрепления версии, паузы и настроек уведомлений. **Ещё → Моды → Обновить Nook** показывает проверенный план обновления. При первой установке Nook загружает последний допустимый опубликованный релиз выбранного канала (по умолчанию Stable). `bootstrap.sh --version X` устанавливает и закрепляет опубликованную версию `X`, а `--dev` явно выбирает ветку разработки. У старых установок без сохранённого канала режим `main` сохраняется до выбора владельца.
 
-Доступны Stable, Release Candidate, Beta, Alpha и Nightly / Dev. Stable принимает только стабильные версии; менее стабильные каналы включают все более стабильные версии. При downgrade Nook показывает отдельное предупреждение и требует дополнительного подтверждения. Выбор канала сам по себе ничего не устанавливает.
+Доступны Stable, Release Candidate, Beta, Alpha и Nightly. Stable принимает только стабильные версии; менее стабильные каналы включают все более стабильные версии. При downgrade Nook показывает отдельное предупреждение и требует дополнительного подтверждения. Выбор канала сам по себе ничего не устанавливает.
 
 Не запускай установщик повторно для обновления. Он предназначен для новой установки и отказывается перезаписывать настроенную папку.
 
@@ -16,14 +16,16 @@
 
 ### Порядок обновления
 
-1. В старом режиме загружается конкретный коммит `main`. После явного выбора канала проверяется GitHub Release, SemVer, тип prerelease и неизменяемый commit тега. Для канального обновления требуется официальный ZIP-артефакт с SHA-256 digest в GitHub Release API; URL, digest, состав ZIP, пути, манифест и синтаксис Python проверяются. Отсутствие digest — отказ, без перехода к непроверенному архиву.
+1. В старом режиме загружается конкретный коммит `main`. Для выбранного канала Nook проверяет релиз, тег, SHA-256, архив и Sigstore-аттестацию официального workflow. Для проверки происхождения установи актуальный GitHub CLI (`gh`). Вход в GitHub не требуется.
 2. Изменения зависимостей, удаление старых исходников или несовместимый `update_api` требуют отдельной миграции. Автоматическое обновление их не выполняет.
 3. Подтверждённая версия ждёт завершения активных задач и очереди. Проверка действительна час; потом её нужно повторить.
 4. Отдельный пользовательский процесс systemd останавливает именно `nook.service` этой установки. Блокировка не позволяет менять исходники, пока новый бот с этой блокировкой работает.
 5. До первой записи сохраняются старые файлы, права и журнал операции в `spool/updates/backups/<номер>`. Меняются только файлы программы; установщик не запускается.
 6. Бот запускается. Обновлятор ждёт успешного обращения бота к Telegram, загрузки модов без ошибок, свежего сигнала от правильного процесса/версии и 20 секунд устойчивой работы. При неудаче восстанавливает старый код и запускает прежнюю службу. Результат приходит в Telegram.
 
-Проверка релиза доверяет GitHub TLS и Release API. SHA-256 digest артефакта плюс файловый манифест выявляют порчу, но не являются независимой подписью издателя. Автоматический режим по умолчанию выключен; доступны уведомления или проверка с явным подтверждением. Бесконтрольная автоустановка не включается.
+Проверка релиза связывает архив с подписанным workflow, версией и commit
+тега. Автоматические проверки по умолчанию выключены. Доступны уведомления
+или показ проверенного плана с подтверждением.
 
 Автоматический перезапуск поддерживает установку через пользовательскую `nook.service`. PM2, контейнеры, вручную запущенные боты и исходный частный Домовой требуют отдельной адаптации. Нельзя подменять их публичным Nook поверх неизвестной структуры.
 
@@ -66,7 +68,7 @@ systemctl --user start nook.service
 
 ## English
 
-Open **More → Mods → Обновления и резервные копии** to select a channel, review releases, pin a version and configure checks. The installer offers Stable by default and can pin the exact checked-out source version. `bootstrap.sh --version X` downloads the exact `vX` tag, which must be allowed by the selected channel. Inspect the proposed update and confirm it separately; never rerun the installer as an upgrade.
+Open **More → Mods → Обновления и резервные копии** to select a channel, review releases, pin a version and configure checks. The installer fetches the newest eligible published release for the selected channel. `bootstrap.sh --version X` installs and pins exact published version `X`. Use `--dev` for a development installation. Release installs and updates require a current GitHub CLI (`gh`) for Sigstore verification without login. Confirm updates separately from the installer.
 
 The updater downloads a pinned commit from `Sppqq/nook`, validates archive paths, the complete integrity manifest and Python syntax, and plans source changes against the installed hashes. Local changes are retained; a conflicting upstream change or a new upstream file colliding with a custom file cancels the update. Dependencies, source deletions, and incompatible update API versions require a separate migration.
 

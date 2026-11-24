@@ -1,6 +1,19 @@
 # Modernization log
 
-## 2026-11-24 — Iteration 2
+## 2026-11-24 — Iteration 3
+
+- Restored the exact PR #7 base. The attached 108-file source archive
+  matches the branch tip byte for byte. Created a verified local Git bundle.
+- Split release preparation, signing and environment-gated publishing.
+  Bootstrap and the updater verify the signed release archive, workflow
+  identity, GitHub asset digest, tag commit and source manifest.
+- Made the installer resolve the published release before opening the
+  installation wizard. Added an explicit development-source path.
+- Checked the public GitHub state. Existing Runs returned `action_required`
+  before jobs were created. Local actionlint passed. No release was published
+  and no repository settings or working instance were modified.
+
+## Historical baseline — 2026-11-24, iteration 2
 
 Working branch: `feature/road-to-10`. No production instance or remote GitHub
 resource was changed. A file-level backup of the touched implementation and

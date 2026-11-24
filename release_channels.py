@@ -8,7 +8,7 @@ CHANNEL_LABELS = {
     'rc': 'Release Candidate',
     'beta': 'Beta',
     'alpha': 'Alpha',
-    'nightly': 'Nightly / Dev',
+    'nightly': 'Nightly',
 }
 IDENTIFIER = r'(?:0|[1-9]\d*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)'
 SEMVER = re.compile(
@@ -124,6 +124,20 @@ def select_release(releases, channel, version=None):
     if not eligible:
         raise ValueError('Для выбранного канала нет опубликованных версий.')
     return eligible[0]
+
+
+def installable_releases(releases):
+    """Filter out historical releases without the current delivery format."""
+    result = []
+    for release in releases:
+        item = normalize_release(release)
+        if item is None or not isinstance(item.get('assets'), list):
+            continue
+        names = {asset['name'] for asset in item['assets']
+                 if isinstance(asset, dict) and isinstance(asset.get('name'), str)}
+        if {'provenance.jsonl', f"nook-{item['version']}.zip"} <= names:
+            result.append(item)
+    return result
 
 
 class _VersionKey:

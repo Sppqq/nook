@@ -9,10 +9,11 @@
 ## 0.1.2-alpha.1
 
 - SemVer release selection with Stable, RC, Beta, Alpha and Nightly channels; existing installs retain the legacy update path until their owner chooses a channel.
-- Release checks use GitHub Release asset digests, pinned tag commits, safe archive validation and explicit downgrade confirmation.
+- Release installs and updates verify GitHub asset digests, Sigstore provenance from the official workflow, the tag commit and per-file hashes.
 - Telegram update controls include channel/version selection, pins, changelog, pause, notification or confirmed install checks, and backup creation.
-- Add private integrity-checked instance backups and verified out-of-place restore; fresh installation can select a channel and matching source tag.
-- Add tag-validated release workflow, release notes, SHA-256 checksums and a direct-dependency SPDX SBOM.
+- Fresh installation selects the newest eligible published release before downloading, with exact version pins and explicit development installation.
+- Dispatch release preparation and publication separately, with verified promotion and a protected Stable environment. Add notes, checksums and a direct-dependency SPDX SBOM.
+- Add private integrity-checked instance backups and verified out-of-place restore.
 
 - Conservative GitHub source updater, Telegram confirmation, local-edit conflicts, preserved runtime data, independent restart supervision and source rollback.
 

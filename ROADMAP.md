@@ -1,8 +1,19 @@
 # Nook modernization roadmap
 
-Status: in progress; this roadmap records the repository baseline observed on
-2026-11-24 and the first safe implementation changes. It does not claim that a
-complete audit or production readiness review has been completed.
+## Current work
+
+- Restored PR #7 exactly at `8e70a28` and retained its history in a verified
+  local Git bundle. The owner-supplied source ZIP matches all 108 tracked files.
+- Implemented manual candidate preparation, Sigstore provenance checks in
+  the installer/updater, a separate publisher and a fail-closed Stable gate.
+  Promotion verifies published predecessors before comparing application trees.
+- Fresh installers resolve the channel or exact published version before
+  downloading. The development checkout has its own explicit mode.
+- Remaining owner setup: protect `main` and version tags, configure the
+  release environments and approve a new Actions run. Existing CI runs for
+  PR #7 reported `action_required`.
+- The next implementation steps are consistent backup/restore, the disposable
+  update and recovery matrix, and the remaining architecture work below.
 
 ## Principles
 
@@ -15,7 +26,7 @@ complete audit or production readiness review has been completed.
 - Test on disposable installations. Do not update production or publish
   releases without explicit owner approval.
 
-## Baseline
+## Historical baseline (before iteration 2)
 
 - The checkout is on `dev`, has a shallow Git history, and has no local tags.
   The working tree was clean before this modernization branch was created.

@@ -48,10 +48,9 @@ def render(tag):
         'update APIs and conflicting local edits. No data migration is implied by '
         'this release note; check the changelog and upgrade guide for requirements.\n\n'
         '## Known limitations\n\n'
-        'The source updater trusts GitHub over HTTPS. SHA-256 asset digests and the '
-        'embedded source manifest detect corruption, but are not a detached signature. '
-        'The independent updater audit and host-level recovery still require operator '
-        'backups and review. See `docs/UPDATES.md` and `SECURITY.md`.\n\n'
+        'The managed release path requires a GitHub Actions Sigstore attestation. '
+        'The legacy main-branch update path uses a pinned GitHub source snapshot. '
+        'See `docs/UPDATES.md` for recovery and trust requirements.\n\n'
         '## Update\n\n'
         'Create a local backup, check the selected channel in Telegram, review the '
         'release and explicitly confirm installation. The updater preserves runtime '
@@ -64,10 +63,11 @@ def render(tag):
         f'- `nook-{version}.zip` — source bundle\n'
         '- `source.json` — source and per-file hashes\n'
         '- `SBOM.spdx.json` — declared direct pinned Python dependencies only\n'
-        '- `SHA256SUMS` — bundle checksums\n\n'
+        '- `SHA256SUMS` — bundle checksums\n'
+        '- `provenance.jsonl` — Sigstore verification bundle\n\n'
         'GitHub serves an asset SHA-256 digest through the Release API; Nook checks '
-        'that digest before reading the archive and verifies every file against the '
-        'manifest. No independent detached signing key is currently configured.\n'
+        'that digest, verifies the signed archive against the official workflow, '
+        'then checks each source file against the manifest.\n'
     )
 
 

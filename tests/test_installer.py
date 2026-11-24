@@ -93,7 +93,7 @@ class InstallerTests(unittest.TestCase):
    calls.append([str(a) for a in args])
    if len(args)>2 and args[1:3]==['-m','venv']:
     py=Path(args[3])/'bin/python';py.parent.mkdir(parents=True);py.write_text('mock-python')
-  argv=['install.py','--accept-terms','--target',str(self.target),'--no-system-packages','--no-start','--owner-id','123456','--token-file',str(tokenfile),'--channel','alpha']
+  argv=['install.py','--dev','--accept-terms','--target',str(self.target),'--no-system-packages','--no-start','--owner-id','123456','--token-file',str(tokenfile),'--channel','alpha']
   with patch.object(m.os,'getuid',return_value=1001),patch.object(m.getpass,'getuser',return_value='friend'),patch.object(m,'run',side_effect=fake_run),patch.object(m,'setup_providers') as providers,patch.object(sys,'argv',argv):
    m.main();providers.assert_called_once()
    from nook_update import update_settings

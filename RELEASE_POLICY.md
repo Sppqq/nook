@@ -1,70 +1,74 @@
 # Release and update-channel policy
 
-## Current process
+`VERSION`, `MANIFEST.json` and the `CHANGELOG.md` release heading must agree
+with the tag `v<VERSION>`. The enabled publication path is a manual
+**Verified release** dispatch on protected `main` in `Sppqq/nook`. Pushing
+a tag does not launch the workflow.
 
-`VERSION` is the canonical SemVer version. A release tag must be `v` plus the
-exact value of that file, and `MANIFEST.json` must carry the same version.
-Pushing a matching version tag is the maintainer's explicit authorization to
-run the release workflow. The workflow runs the test and smoke checks before
-publishing source artifacts to GitHub Releases. It cannot run for a non-tag
-ref. Stable releases are not marked as prereleases; alpha, beta, RC and
-nightly tags are.
+1. Run the workflow with Publish off to prepare the branch or an existing
+   tag. It checks Python, the installer, runtime smoke tests, checksums and the
+   tracked manifest. Download the resulting candidate from the workflow run.
+2. After review, an authorized maintainer creates the exact version tag on a
+   commit reachable from protected `main`. Verify the appropriate promotion
+   predecessor when dispatching for a tag.
+3. Dispatch from `main` with the tag and Publish on. A separate job attests
+   the same checked artifacts via Sigstore. The publish job only downloads
+   artifacts, checks the tag still resolves to the prepared revision, verifies
+   integrity/provenance and publishes through the channel's environment.
 
-The workflow uses the GitHub-generated asset SHA-256 digest, and the updater
-refuses missing/mismatched asset digests, unexpected download URLs, unsafe ZIP
-members and invalid per-file manifest hashes. This trusts GitHub's HTTPS/API
-and authorized maintainers. It is not a detached signature or a guarantee
-against compromised maintainer credentials or GitHub.
+`0.1.2-alpha.1` is the one bootstrap Alpha allowed without an existing
+Nightly. Future tagged candidates follow Nightly → Alpha → Beta → RC →
+Stable within the same major/minor/patch. Set `promote_from` to the published
+tag from the previous stage. The workflow verifies its attested ZIP and
+requires its commit to be an ancestor of the candidate, with identical Git
+paths, file modes and contents apart from VERSION, the generated manifest and
+changelogs. Each promotion builds and tests a new versioned archive.
 
-`SBOM.spdx.json` records exact direct Python requirements from the two
-requirements files. It does not claim to inventory transitive dependencies,
-provider CLIs, operating-system packages or runtime-installed tools.
+## Repository setup by the owner
 
-## Version channels
+- Protect `main` with pull-request review and required CI checks. Restrict
+  changes to the release workflow to trusted maintainers.
+- Create a ruleset for tags `v*`, restricting creation to release
+  maintainers and disallowing tag updates/deletion in normal operation.
+- Create environments `release-prerelease` and `release-stable`, with
+  deployment branches limited to `main`. Require an independent reviewer
+  for Stable and enable prevention of self-review. Add environment secret
+  `STABLE_RELEASE_ENABLED` with value `true` only to `release-stable`.
+  The Stable job fails closed when the secret is absent. Test approval and
+  rollback on a disposable host before approving the first Stable run.
+- Consider GitHub immutable releases for future publication so that the
+  server locks each published tag and its assets. Historical releases keep
+  their original tags, metadata and files.
 
-Supported versions:
+No release job uses a maintainer PAT. Verification has `contents: read`,
+attestation adds `id-token: write` and `attestations: write`, and only the
+environment-gated publisher has `contents: write`.
 
-- Stable: `1.2.0`
-- Release Candidate: `1.2.0-rc.1`
-- Beta: `1.2.0-beta.1`
-- Alpha: `1.2.0-alpha.1`
-- Nightly: `1.2.0-nightly.20261124`
+## Delivery and channel eligibility
 
-Stable selects only stable tags. RC includes stable and RC releases. Beta
-includes stable, RC and beta. Alpha includes those plus alpha. Nightly includes
-all valid channels. Invalid prerelease identifiers, drafts and release/tag
-metadata mismatches are excluded. SemVer precedence is used, not publication
-date or the GitHub Latest marker.
+Installers and managed channel updates use an official release ZIP and
+`provenance.jsonl`. GitHub API digests guard both downloads. GitHub CLI
+verifies the Sigstore bundle against the ZIP bytes, the Nook release
+workflow on `main`, and a GitHub-hosted runner. The archive binds its version
+and source commit to the tag and its manifest checks each source file.
+Install/update hosts need a GitHub CLI that supports these attestation flags
+and access to Sigstore trust metadata. No user GitHub login is used.
 
-Existing installations with no channel setting retain the previous `main`
-source-update behavior. New installs choose Stable by default. A selected
-channel, exact version pin, pause flag and update confirmation mode are stored
-per installation in `spool/updates/settings.json`. Changing channels never
-installs or downgrades a version; installation remains a separate explicit
-action. A pin that does not match the selected channel is rejected at check
-time, not silently cleared.
+| Channel | Example | Also eligible |
+|---|---|---|
+| Stable | `1.2.0` | |
+| RC | `1.2.0-rc.1` | Stable |
+| Beta | `1.2.0-beta.1` | Stable, RC |
+| Alpha | `1.2.0-alpha.1` | Stable, RC, Beta |
+| Nightly | `1.2.0-nightly.20261124` | Stable, RC, Beta, Alpha |
 
-Automatic checks are off by default. `notify` reports a verified update;
-`confirm` stages one and offers an install button. Both still require explicit
-confirmation, idle task lanes, backup and updater health checks. Automatic
-security-only or unattended channel installation is not supported.
+Version selection uses SemVer precedence and excludes drafts, inconsistent
+metadata and releases without the required assets. Choose a channel before
+downloading. `--version` installs and pins an exact published release.
+`--dev` explicitly installs a development checkout or snapshot. Older
+instances with no channel selected keep their existing `main` update path
+until the owner chooses a channel. See [update and recovery](docs/UPDATES.md).
 
-## Promotion and Stable gate
-
-Each channel tag is built and tested independently. Same-artifact promotion
-between channels is not yet automated; maintainers must not describe a newer
-tag as a promotion of an already-tested artifact unless its commit and bytes
-are demonstrably identical. Stable requires a matching non-prerelease SemVer
-tag and passing release workflow. Before adding a Stable tag, maintainers must
-also verify migration and rollback on a disposable installation, review
-compatibility notes, confirm no known critical unfixed issue, and obtain owner
-approval. GitHub branch protection and required reviewers are repository
-settings and must be configured by an authorized owner.
-
-## Rollback
-
-The updater journals source writes and restores the previous managed source
-after failed health checks. This does not roll back arbitrary data migrations
-or external side effects. Keep independent backups. Manual rollback is
-documented in `docs/UPDATES.md`; full instance backups can be verified and
-restored into a new directory with `bin/nook-backup`.
+`SBOM.spdx.json` lists direct pinned Python dependencies from the
+requirements files. It does not list transitive packages, OS dependencies or
+provider tools.

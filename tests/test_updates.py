@@ -356,18 +356,30 @@ class UpdateTests(unittest.TestCase):
             for path in self.source.rglob('*'):
                 if path.is_file():
                     bundle.write(path, path.relative_to(self.source).as_posix())
+            bundle.writestr('NOOK_RELEASE.json', json.dumps({'version': version, 'revision': 'c' * 40}))
         release = {'tag_name': 'v' + version, 'prerelease': True, 'draft': False,
-                   'name': 'test beta', 'body': 'Test changes'}
+                   'name': 'test beta', 'body': 'Test changes',
+                   'assets': [{'name': 'nook-' + version + '.zip'}, {'name': 'provenance.jsonl'}]}
         u.save_update_settings(self.home, channel='beta')
 
-        def asset_download(item, destination, selected):
+        def asset_download(item, destination, selected, limit=None, *, name=None):
             self.assertEqual(selected, version)
-            shutil.copyfile(archive, destination)
+            if name == 'provenance.jsonl':
+                destination.write_text('test bundle')
+            else:
+                shutil.copyfile(archive, destination)
 
         with patch.object(u, 'list_releases', return_value=[release]), \
                 patch.object(u, 'release_commit', return_value='c' * 40), \
-                patch.object(u, 'download_release_asset', side_effect=asset_download):
+                patch.object(u, 'download_release_asset', side_effect=asset_download), \
+                patch.object(u, 'verify_release_provenance') as provenance:
             plan = u.prepare(self.home)
+            provenance.assert_called_once()
+            provenance.side_effect = u.UpdateError('signature rejected')
+            with self.assertRaisesRegex(u.UpdateError, 'signature rejected'):
+                u.prepare(self.home)
+            self.assertEqual(list((u.workspace(self.home) / 'staged').iterdir()),
+                             [u.workspace(self.home) / 'staged' / plan['id']])
         self.assertEqual(plan['version'], version)
         self.assertEqual(plan['channel'], 'beta')
         self.assertEqual(plan['revision'], 'c' * 40)

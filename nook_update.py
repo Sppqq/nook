@@ -22,7 +22,7 @@ import uuid
 import zipfile
 
 from release_channels import (CHANNELS, channel_for_version, compare_versions,
-                              eligible_releases, select_release)
+                              eligible_releases, installable_releases, select_release)
 
 ROOT = Path(__file__).resolve().parent
 REPO = 'Sppqq/nook'
@@ -237,11 +237,16 @@ def github_json(url, limit=2 * 1024 * 1024):
 
 
 def list_releases():
-    url = f'https://api.github.com/repos/{REPO}/releases?per_page=100'
-    releases = github_json(url)
-    if not isinstance(releases, list):
-        raise UpdateError('GitHub вернул некорректный список релизов.')
-    return releases
+    releases = []
+    for page in range(1, 21):
+        items = github_json(f'https://api.github.com/repos/{REPO}/releases?per_page=100&page={page}',
+                            limit=16 * 1024 * 1024)
+        if not isinstance(items, list):
+            raise UpdateError('GitHub вернул некорректный список релизов.')
+        releases.extend(items)
+        if len(items) < 100:
+            return releases
+    raise UpdateError('Не удалось получить полный список релизов GitHub.')
 
 
 def release_commit(tag):
@@ -260,9 +265,9 @@ def release_commit(tag):
     raise UpdateError('Не удалось разрешить тег релиза в неизменяемый commit.')
 
 
-def download_release_asset(release, dest, version, limit=10 * 1024 * 1024):
+def download_release_asset(release, dest, version, limit=10 * 1024 * 1024, *, name=None):
     assets = release.get('assets')
-    expected_name = 'nook-' + version + '.zip'
+    expected_name = name or 'nook-' + version + '.zip'
     if not isinstance(assets, list):
         raise UpdateError('GitHub Release не содержит проверяемых артефактов.')
     asset = next((item for item in assets if isinstance(item, dict)
@@ -283,8 +288,8 @@ def download_release_asset(release, dest, version, limit=10 * 1024 * 1024):
     hasher = hashlib.sha256()
     try:
         with urllib.request.urlopen(req, timeout=45) as response, Path(dest).open('wb') as out:
-            final_host = urlparse(response.geturl()).hostname
-            if final_host not in {
+            final_url = urlparse(response.geturl())
+            if final_url.scheme != 'https' or final_url.hostname not in {
                     'github.com', 'release-assets.githubusercontent.com',
                     'objects.githubusercontent.com'}:
                 raise UpdateError('GitHub перенаправил загрузку на недоверенный адрес.')
@@ -304,6 +309,51 @@ def download_release_asset(release, dest, version, limit=10 * 1024 * 1024):
     if 'sha256:' + hasher.hexdigest() != digest_value:
         Path(dest).unlink(missing_ok=True)
         raise UpdateError('Контрольная сумма артефакта GitHub Release не совпала.')
+
+
+def verify_release_provenance(archive, bundle):
+    gh = shutil.which('gh')
+    if gh is None:
+        raise UpdateError('Для проверки подписи релиза установи актуальный GitHub CLI (gh). Вход не нужен.')
+    with tempfile.TemporaryDirectory(prefix='nook-gh-') as config:
+        env = dict(os.environ, GH_CONFIG_DIR=config, GH_PROMPT_DISABLED='1', GH_HOST='github.com')
+        for key in ('GH_TOKEN', 'GITHUB_TOKEN', 'GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN'):
+            env.pop(key, None)
+        try:
+            subprocess.run(
+                [gh, 'attestation', 'verify', str(archive), '--bundle', str(bundle),
+                 '--repo', REPO, '--signer-workflow', REPO + '/.github/workflows/release.yml',
+                 '--source-ref', 'refs/heads/main', '--deny-self-hosted-runners'],
+                env=env, check=True, timeout=90, stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+        except (OSError, subprocess.SubprocessError):
+            raise UpdateError('Не удалось подтвердить происхождение релиза из workflow Nook.') from None
+
+
+def fetch_release_source(release, stage):
+    version = release['version']
+    revision = release_commit('v' + version)
+    asset = stage / ('nook-' + version + '.zip')
+    bundle = stage / 'provenance.jsonl'
+    download_release_asset(release, asset, version)
+    download_release_asset(release, bundle, version, 1024 * 1024, name=bundle.name)
+    verify_release_provenance(asset, bundle)
+    source = stage / 'source'
+    source.mkdir()
+    unpack_zip(asset, source)
+    metadata = source / 'NOOK_RELEASE.json'
+    try:
+        recorded = read_json(metadata)
+        if recorded != {'version': version, 'revision': revision}:
+            raise ValueError
+        if read_json(source / 'MANIFEST.json')['version'] != version:
+            raise ValueError
+    except (OSError, ValueError, KeyError, TypeError):
+        raise UpdateError('Версия или commit подписанного архива не соответствует тегу.') from None
+    metadata.unlink()
+    verify_source(source)
+    return source, revision
 
 
 def unpack_zip(archive, dest):
@@ -384,7 +434,7 @@ def verify_source(source):
     if manifest.get('format') != 1 or manifest.get('update_api') != 1 or not manifest.get('sha256'):
         raise UpdateError('Неподдерживаемый манифест обновления.')
     expected = set(manifest['sha256']) | {'MANIFEST.json'}
-    actual = {str(p.relative_to(source)) for p in source.rglob('*') if p.is_file()}
+    actual = {p.relative_to(source).as_posix() for p in source.rglob('*') if p.is_file()}
     if actual != expected:
         raise UpdateError('Состав архива не совпадает с манифестом.')
     for name, wanted in manifest['sha256'].items():
@@ -475,33 +525,31 @@ def prepare_release(home, version=None):
             txn = read_json(base / 'transaction.json')
             if txn['status'] not in ('success', 'rolled_back'):
                 raise UpdateError('Есть незавершённое обновление. Сначала проверь статус и выполни откат.')
-        release = select_release(list_releases(), settings['channel'], version)
+        try:
+            release = select_release(installable_releases(list_releases()), settings['channel'], version)
+        except ValueError as exc:
+            raise UpdateError(str(exc)) from None
         ident = uuid.uuid4().hex[:16]
         stage = base / 'staged' / ident
         stage.mkdir(parents=True, mode=0o700)
-        revision = release_commit('v' + release['version'])
-        asset = stage / 'release.zip'
-        download_release_asset(release, asset, release['version'])
-        source = stage / 'source'
-        source.mkdir()
-        unpack_zip(asset, source)
-        plan = plan_source(home, source, revision, stage)
-        plan['version'] = read_json(source / 'MANIFEST.json')['version']
-        current_version = read_json(path_at(home, 'MANIFEST.json')).get('version')
         try:
-            plan['downgrade'] = compare_versions(plan['version'], current_version) < 0
-        except (TypeError, ValueError):
+            source, revision = fetch_release_source(release, stage)
+            plan = plan_source(home, source, revision, stage)
+            current_version = read_json(path_at(home, 'MANIFEST.json')).get('version')
+            try:
+                plan['downgrade'] = compare_versions(release['version'], current_version) < 0
+            except (TypeError, ValueError):
+                raise UpdateError('Не удалось безопасно сравнить текущую и выбранную версии.') from None
+            plan['current_version'] = current_version
+            plan['version'] = release['version']
+            plan['release_name'] = str(release.get('name') or '')[:200]
+            plan['release_body'] = str(release.get('body') or '')[:12000]
+            plan['channel'] = release['channel']
+            json_write(stage / 'plan.json', plan)
+            return plan
+        except Exception:
             shutil.rmtree(stage, ignore_errors=True)
-            raise UpdateError('Не удалось безопасно сравнить текущую и выбранную версии.') from None
-        plan['current_version'] = current_version
-        if plan['version'] != release['version']:
-            shutil.rmtree(stage, ignore_errors=True)
-            raise UpdateError('Версия манифеста не совпала с тегом GitHub Release.')
-        plan['release_name'] = str(release.get('name') or '')[:200]
-        plan['release_body'] = str(release.get('body') or '')[:12000]
-        plan['channel'] = release['channel']
-        json_write(stage / 'plan.json', plan)
-        return plan
+            raise
 
 
 def get_plan(home, ident):
@@ -772,7 +820,7 @@ def main():
         settings = update_settings(home)
         if settings['channel'] is None:
             raise UpdateError('Сначала выбери канал обновлений.')
-        releases = eligible_releases(list_releases(), settings['channel'])
+        releases = eligible_releases(installable_releases(list_releases()), settings['channel'])
         print(json.dumps([{'version': item['version'], 'channel': item['channel'],
                            'name': item.get('name'), 'published_at': item.get('published_at')}
                           for item in releases[:20]], ensure_ascii=False))
