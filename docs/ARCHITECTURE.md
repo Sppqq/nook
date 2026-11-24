@@ -32,6 +32,11 @@ test with dedicated accounts.
 
 `mods.py` loads trusted Python extensions from `mods/`. `mods/_example.py` documents the extension API. Mods can add buttons, handlers, and periodic jobs. Core restarts are deferred until active tasks finish.
 
+New local drafts are versioned by `local_extensions.py` and executed by
+`extension_sandbox.py`. They use a data-only API and a root-owned approval
+policy outside the instance. A trusted Telegram mod provides operator controls.
+See [local extensions](LOCAL_EXTENSIONS.md).
+
 `guard.py` compares local and remote state with saved baselines. `bin/watchfix` registers monitoring after a change; `bin/later` creates scheduled tasks. The bot's main process runs the checks.
 
 `bin/` contains agent and owner tools. `setup/` contains an optional root helper and owner API clients. `antigravity_limits.py` reads provider quota information. `.agents/skills/` contains tool instructions.

@@ -2,6 +2,10 @@
 
 ## Current work
 
+- Iteration 5 implements a separate local extension lifecycle, isolated API v1
+  execution, owner policy, versioning, health checks, and automatic rollback.
+  Trusted legacy modules can be pinned by hash without migrating their API.
+
 - Iteration 4 extracts Telegram identity checks and durable scheduled-job
   storage. Actual aiogram dispatch and the existing `later` CLI exercise
   these paths without a production bot.

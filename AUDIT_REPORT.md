@@ -2,6 +2,12 @@
 
 ## Current findings
 
+- Iteration 5 introduces staged local extensions. Draft code never loads into
+  the Telegram process. Linux namespace isolation, explicit owner approvals,
+  and read-only artifact snapshots protect the isolated execution path.
+  Secure operation against the service UID itself still depends on OS
+  ownership of the broker and the absence of broad sudo grants.
+
 - Iteration 4 confirmed that the PR and push took place in the same
   repository under the same user. Both check suites failed before jobs
   started. The public data does not justify attributing this to fork approval.

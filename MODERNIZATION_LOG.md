@@ -1,5 +1,19 @@
 # Modernization log
 
+## 2026-11-24 — Iteration 5
+
+- Added staged Python mods/tools and text skills, with content-addressed
+  versions, root-owned approval policy, API v1 health checks, Telegram
+  controls and automatic rollback after failed invocation. Optional
+  legacy hash pinning preserves the existing `setup(m)` interface.
+- Verified the new sandbox under an unprivileged user in Ubuntu WSL using
+  real Bubblewrap. Host files, the host loopback listener and the fixture
+  environment secret were unavailable from the extension.
+- Exercised an actual root-owned policy in disposable WSL. Activation was
+  denied without approval, a broken second revision rolled back to the
+  first, and policy revocation prevented further calls. The full stage
+  passed 157 tests and 3 owner API checks.
+
 ## 2026-11-24 — Iteration 4
 
 - Moved Telegram identity checks into `telegram_gateway.py` and scheduled

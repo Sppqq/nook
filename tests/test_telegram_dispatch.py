@@ -13,6 +13,7 @@ from aiogram.types import CallbackQuery, Update
 
 from nook_update import update_settings
 import job_scheduler
+from local_extensions import Store
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -29,16 +30,17 @@ class TelegramDispatchTests(unittest.IsolatedAsyncioTestCase):
             exec(compile(bot_path.read_text(), str(bot_path), 'exec'), sandbox)
         self.runtime = sandbox
         self.addAsyncCleanup(self.runtime['bot'].session.close)
-        mod_path = self.home / 'mods' / 'update_manager.py'
-        mod_path.parent.mkdir()
-        shutil.copyfile(ROOT / 'mods/update_manager.py', mod_path)
-        spec = importlib.util.spec_from_file_location('disposable_update_manager', mod_path)
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
         registry = self.runtime['REG']
-        instance = self.runtime['modsys'].Mod('update_manager', registry.core)
-        mod.setup(instance)
-        registry.mods['update_manager'] = instance
+        (self.home / 'mods').mkdir()
+        for name in ('update_manager', 'local_extension_ui'):
+            mod_path = self.home / 'mods' / f'{name}.py'
+            shutil.copyfile(ROOT / 'mods' / f'{name}.py', mod_path)
+            spec = importlib.util.spec_from_file_location('disposable_' + name, mod_path)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            instance = self.runtime['modsys'].Mod(name, registry.core)
+            mod.setup(instance)
+            registry.mods[name] = instance
         registry.core.edit = AsyncMock(return_value=True)
         registry.core.send = AsyncMock()
 
@@ -108,3 +110,25 @@ class TelegramDispatchTests(unittest.IsolatedAsyncioTestCase):
         self.runtime['pause_for_limit'].assert_not_awaited()
         self.assertIn(job['claim_id'], job_scheduler.unresolved(queue))
         self.assertEqual(job_scheduler.take_due(queue, now=122), [])
+
+    async def test_owner_can_check_activate_and_rollback_a_staged_skill(self):
+        import hashlib
+
+        store = Store(self.home)
+        source = self.home / 'skill.md'
+        source.write_text('fixture skill')
+        store.stage('skill', 'example', '1.0.0', source)
+        version = hashlib.sha256(b'1.0.0').hexdigest()[:12]
+        key = f'skill:example:{version}'
+        await self.dispatch('mod:local_extension_ui:t:' + key)
+        self.assertTrue(store.status('skill', 'example')['versions']['1.0.0']['checked'])
+        with patch('local_extensions.approval', return_value=False):
+            await self.dispatch('mod:local_extension_ui:a:' + key)
+        self.assertIsNone(store.status('skill', 'example')['active'])
+        with patch('local_extensions.approval', return_value=True):
+            await self.dispatch('mod:local_extension_ui:a:' + key, sender=8, chat=8)
+            self.assertIsNone(store.status('skill', 'example')['active'])
+            await self.dispatch('mod:local_extension_ui:a:' + key)
+        self.assertEqual(store.status('skill', 'example')['active'], '1.0.0')
+        await self.dispatch('mod:local_extension_ui:r:skill:example')
+        self.assertIsNone(store.status('skill', 'example')['active'])

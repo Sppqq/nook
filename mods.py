@@ -225,12 +225,18 @@ class Registry:
         self.failed = {}     # name -> текст ошибки загрузки
 
     def load_one(self, name):
+        from local_extensions import trusted_module
+
         path = os.path.join(MODS_DIR, f"{name}.py")
+        source = trusted_module(name, path)
         m = Mod(name, self.core)
         modname = f"nook_mod_{name}_{int(time.time() * 1000)}"
         spec = importlib.util.spec_from_file_location(modname, path)
         module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
+        if source is None:
+            spec.loader.exec_module(module)
+        else:
+            exec(compile(source, path, "exec"), module.__dict__)
         doc = (module.__doc__ or "").strip()
         m.title = getattr(module, "TITLE", None) or (doc.splitlines()[0] if doc else name)
         m.doc = doc
