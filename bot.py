@@ -4846,9 +4846,15 @@ async def core_import_ok():
             "src=src.replace('asyncio.run(main())','pass');"
             "exec(compile(src,sys.argv[1],'exec'),{'__file__':sys.argv[1],'__name__':'check'})")
     p = await asyncio.create_subprocess_exec(sys.executable, "-c", code, os.path.join(HOME, "bot.py"),
-                                             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
-    out, _ = await asyncio.wait_for(p.communicate(), 60)
-    return p.returncode == 0, out.decode(errors="replace")[-1500:]
+                                             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+                                             start_new_session=True)
+    try:
+        out = await asyncio.wait_for(read_tail(p.stdout), 60)
+        return await asyncio.wait_for(p.wait(), 5) == 0, out.decode(errors="replace")[-1500:]
+    except asyncio.TimeoutError:
+        return False, "Проверка изменённого ядра не завершилась вовремя."
+    finally:
+        await stop_process_group(p)
 
 
 async def mods_loop():

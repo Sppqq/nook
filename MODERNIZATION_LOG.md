@@ -26,6 +26,16 @@
   reported no known advisories for the two requirement files at run time.
 - Extracted bounded process-group teardown and diagnostics to
   `agent_process.py` in the first incremental runtime refactor.
+- Ran the standalone systemd drill in a disposable Ubuntu WSL instance.
+  Historical-source upgrade, synthetic Stable return, failed launch and
+  rollback, and recovery after environment restart each succeeded.
+  Separate filesystem/network drills covered disk capacity, disconnected
+  networking and a truncated ZIP.
+- Removed hard-coded instance paths from the restored project/owner tools
+  and OpenBot memory. Backups now refuse an unfinished update and exclude
+  pending request files that depend on ephemeral staging.
+- Recorded the first branch-aware coverage and smoke timing in the current
+  audit, including the weak direct coverage of the main Telegram runtime.
 
 ## Historical baseline — 2026-11-24, iteration 2
 

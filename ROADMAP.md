@@ -19,6 +19,12 @@
   updates default to off.
 - Extracted process-group cleanup from `bot.py` for Codex execution and quota
   checks, and for Mercury shell lifetime management.
+- Tested the historical 0.1.1 → Alpha path on an isolated systemd service.
+  Tested synthetic Stable fallback, failed-start rollback, Linux restart
+  recovery, low disk, network loss and a truncated artifact.
+- The first coverage run showed the Telegram entry point, runtime guard and
+  Antigravity quota logic as the lowest measured areas. These need focused
+  tests before broader subsystem changes.
 - Live GitHub publication, production-like provider authentication and
   broader architecture, performance, coverage and localization work remain.
 

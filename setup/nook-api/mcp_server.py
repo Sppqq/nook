@@ -8,7 +8,7 @@ import urllib.request
 import urllib.error
 
 BASE = 'http://127.0.0.1:18791'
-TOKEN = Path('__NOOK_USER_HOME__/nook/spool/owner-api/token')
+TOKEN = Path(__file__).resolve().parents[2] / 'spool' / 'owner-api' / 'token'
 
 
 def api(path, data=None):

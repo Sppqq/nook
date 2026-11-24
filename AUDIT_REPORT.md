@@ -26,6 +26,34 @@
   retained a pipe. Its full request now has a deadline and bounded
   diagnostics. Codex requests and quota checks and Mercury shell tools share
   process cleanup with a bounded termination sequence.
+- A restored installation's project catalog, OpenBot memory and owner API
+  now resolve paths from the restored source location. Backups refuse a
+  half-applied update and omit queued requests tied to excluded staging.
+
+### Disposable Linux recovery evidence
+
+- Ran the real user-systemd updater from historical `v0.1.1` files to the
+  Alpha source, then back to historical files via a synthetic published
+  Stable feed. Local memory, a mod, a skill and test authorization survived.
+- A failing service process triggered automatic rollback. Terminating and
+  restarting the isolated WSL environment during `awaiting_health` verified
+  recovery through the installed pre-start guard.
+- A 12 MiB tmpfs triggered disk preflight before live source writes. A
+  network namespace with no routes triggered staging cleanup. A truncated
+  ZIP was rejected.
+- The systemd fixture emitted realistic health records and never contacted
+  Telegram. The release signature and protected-environment approval still
+  need a GitHub Actions run for this repository.
+
+### Coverage and timing baseline
+
+- At `72794e1`, `coverage run --branch --source=. -m unittest discover -s tests`
+  reported 28% total, 69% for the updater, 79% for backup and 1% for
+  `bot.py`. Tests that execute extracted AST fixtures do not trace the
+  original bot file. This measurement is the direct unit-suite coverage.
+- Three isolated runs of the bot import and chart smoke program took
+  4.04, 3.56 and 3.70 seconds. This measures startup/import and chart work
+  in Ubuntu WSL, with Telegram polling and provider requests disabled.
 
 ## Historical Stage 0 and iteration 2 baseline
 

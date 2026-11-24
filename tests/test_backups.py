@@ -1,5 +1,6 @@
 import io
 from pathlib import Path
+import runpy
 import shutil
 import sqlite3
 import subprocess
@@ -53,6 +54,7 @@ class BackupTests(unittest.TestCase):
         self.write('.venv/bin/python', 'not shipped')
         self.write('.git/config', 'private git data')
         self.write('spool/updates/staged/a/source.tar.gz', 'staging')
+        self.write('spool/updates/request.json', '{"id":"pending"}')
         self.write('spool/backups/old.tar.gz', 'previous')
         backup = b.create_backup(self.home)
         with tarfile.open(backup, 'r:gz') as archive:
@@ -61,6 +63,7 @@ class BackupTests(unittest.TestCase):
         self.assertNotIn('.venv/bin/python', names)
         self.assertNotIn('.git/config', names)
         self.assertNotIn('spool/updates/staged/a/source.tar.gz', names)
+        self.assertNotIn('spool/updates/request.json', names)
         self.assertNotIn('spool/backups/old.tar.gz', names)
         self.assertEqual(len([n for n in names if n.startswith('spool/backups/')]), 0)
 
@@ -146,6 +149,29 @@ class BackupTests(unittest.TestCase):
         second = b.create_backup(self.home, keep=1)
         self.assertTrue(second.is_file())
         self.assertFalse(first.exists())
+
+    def test_backup_refuses_incomplete_update(self):
+        first = b.create_backup(self.home)
+        self.write('spool/updates/transaction.json', '{"status":"awaiting_health"}')
+        with self.assertRaisesRegex(b.BackupError, 'незавершённое обновление'):
+            b.create_backup(self.home, keep=1)
+        self.assertTrue(first.is_file())
+
+    def test_restored_tools_use_restored_runtime_paths(self):
+        repo = Path(b.__file__).resolve().parent
+        paths = {
+            'bin/projects': ('BASE', ''),
+            'mods/openbot_bridge.py': ('MEMORY', 'memory'),
+            'mods/owner_api.py': ('ROOT', 'spool/owner-api'),
+            'setup/nook-api/mcp_server.py': ('TOKEN', 'spool/owner-api/token'),
+        }
+        for name in paths:
+            self.write(name, (repo / name).read_text())
+        archive = b.create_backup(self.home)
+        destination = b.restore_to_new_directory(archive, self.home.parent / 'restored')
+        for name, (key, relative) in paths.items():
+            with self.subTest(name=name):
+                self.assertEqual(runpy.run_path(str(destination / name))[key], destination / relative)
 
     @unittest.skipUnless(shutil.which('age') and shutil.which('age-keygen'), 'age is optional')
     def test_age_archive_requires_identity_and_enforces_limits(self):

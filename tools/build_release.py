@@ -162,18 +162,20 @@ def build(root=ROOT):
         for name, data in sorted(files.items()):
             executable = modes[name] == '100755'
             info = zipfile.ZipInfo(name, date_time=(2026, 1, 1, 0, 0, 0))
+            info.create_system = 3
             info.compress_type = zipfile.ZIP_DEFLATED
             info.external_attr = (0o100755 if executable else 0o100644) << 16
             output.writestr(info, data)
             bundle['files'][name] = {'content': data.decode(), 'sha256': hashlib.sha256(data).hexdigest(), 'executable': executable}
         info = zipfile.ZipInfo('NOOK_RELEASE.json', date_time=(2026, 1, 1, 0, 0, 0))
+        info.create_system = 3
         info.external_attr = 0o100644 << 16
         output.writestr(info, encode({'version': version, 'revision': revision}))
     (dist / 'source.json').write_bytes(encode(bundle))
     (dist / 'SBOM.spdx.json').write_bytes(build_sbom(root, version))
     (dist / 'SHA256SUMS').write_text(''.join(
         hashlib.sha256((dist / name).read_bytes()).hexdigest() + '  ' + name + '\n'
-        for name in [archive.name, 'source.json', 'SBOM.spdx.json']))
+        for name in [archive.name, 'source.json', 'SBOM.spdx.json']), encoding='ascii', newline='\n')
     print(f'{len(files)} files; {archive.name}; source.json; SBOM.spdx.json; SHA256SUMS')
     return files
 

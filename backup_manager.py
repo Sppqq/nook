@@ -27,7 +27,7 @@ MAX_TOTAL_SIZE = 2 * 1024 * 1024 * 1024
 MAX_ARCHIVE_SIZE = MAX_TOTAL_SIZE + 32 * 1024 * 1024
 EXCLUDED_DIRS = {'.git', '.venv', '__pycache__', 'dist'}
 EXCLUDED_FILES = {'.nook-runtime.lock'}
-UPDATE_EPHEMERAL = {'lock', 'health.json', 'staged'}
+UPDATE_EPHEMERAL = {'lock', 'health.json', 'request.json', 'staged'}
 PROVIDER_HOME_FILES = (
     '.codex/auth.json',
     '.codex/config.toml',
@@ -203,21 +203,16 @@ class _HashingReader:
 
 @contextlib.contextmanager
 def _lock(root):
-    spool = root / 'spool'
-    if spool.is_symlink():
-        raise BackupError('Каталог spool не может быть символической ссылкой.')
-    spool.mkdir(parents=True, exist_ok=True, mode=0o700)
-    backup_root = _backup_root(root)
-    if backup_root.is_symlink():
-        raise BackupError('Каталог резервных копий не может быть символической ссылкой.')
-    backup_root.mkdir(parents=True, exist_ok=True, mode=0o700)
-    backup_root.chmod(0o700)
-    lock_path = backup_root / '.lock'
-    flags = os.O_CREAT | os.O_RDWR | getattr(os, 'O_NOFOLLOW', 0)
-    fd = os.open(lock_path, flags, 0o600)
-    with os.fdopen(fd, 'a+b') as stream, _directory(backup_root) as root_fd:
-        fcntl.flock(stream, fcntl.LOCK_EX)
-        yield Path(f'/proc/self/fd/{root_fd}')
+    with _directory(_backup_root(root), create=True) as root_fd:
+        os.fchmod(root_fd, 0o700)
+        fd = os.open('.lock', os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK,
+                     0o600, dir_fd=root_fd)
+        with os.fdopen(fd, 'a+b') as stream:
+            info = os.fstat(stream.fileno())
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                raise BackupError('Небезопасный файл блокировки резервных копий.')
+            fcntl.flock(stream, fcntl.LOCK_EX)
+            yield Path(f'/proc/self/fd/{root_fd}')
 
 
 def _database_files(files):
@@ -327,7 +322,7 @@ def _rotate(root, newest, keep):
 
 def create_backup(home, *, online=False, include_providers=False, limits=DEFAULT_LIMITS,
                   keep=None, recipient=None, identity=None):
-    from nook_update import UpdateError, lock, runtime_lock
+    from nook_update import UpdateError, lock, path_at, read_json, runtime_lock
 
     if (recipient is None) != (identity is None):
         raise BackupError('Для зашифрованной копии укажи получателя и проверочный age-ключ.')
@@ -338,6 +333,9 @@ def create_backup(home, *, online=False, include_providers=False, limits=DEFAULT
         with _directory(root), lock(root), contextlib.ExitStack() as stack:
             if not online:
                 stack.enter_context(runtime_lock(root))
+            journal = path_at(root, 'spool/updates/transaction.json')
+            if journal.exists() and read_json(journal).get('status') not in {'success', 'rolled_back'}:
+                raise BackupError('Сначала восстанови незавершённое обновление.')
             backup_root = stack.enter_context(_lock(root))
             suffix = '.tar.gz.age' if recipient else '.tar.gz'
             name = 'nook-backup-' + time.strftime('%Y%m%d-%H%M%S') + '-' + uuid.uuid4().hex[:8] + suffix
@@ -355,6 +353,8 @@ def create_backup(home, *, online=False, include_providers=False, limits=DEFAULT
                 # A hard link publishes a verified file without replacing any existing backup.
                 os.link(output.name, backup_root / name)
             with _directory(_backup_root(root)) as directory:
+                if not os.path.samestat(os.fstat(directory), backup_root.stat()):
+                    raise BackupError('Каталог резервных копий был подменён.')
                 os.fsync(directory)
             if keep is not None:
                 _rotate(backup_root, backup_root / name, keep)
