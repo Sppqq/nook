@@ -68,7 +68,7 @@ jobs:
           python -m unittest discover -s tests -v
           python setup/nook-api/test_api.py
           python -m tools.smoke_runtime
-          bash -n bootstrap.sh install.sh setup/install-root.sh
+          for script in bootstrap.sh install.sh setup/install-root.sh; do bash -n "$script"; done
           bash install.sh --check
           python tools/sync_bootstrap.py --check
           python tools/build_release.py

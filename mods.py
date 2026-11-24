@@ -274,6 +274,8 @@ class Registry:
     async def _loop(self, m, secs, fn):
         while True:
             await asyncio.sleep(secs)
+            if getattr(self.core, 'backup_active', False) is True:
+                continue
             await m.call(fn, None, f"every({secs})")
             if m.errors >= 5:
                 await self.core.notify(f"{self.core.E('err')} Мод **{m.name}** падает 5 раз подряд — фоновую задачу остановил.")

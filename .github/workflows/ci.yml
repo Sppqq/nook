@@ -19,6 +19,6 @@ jobs:
       - run: python -m tools.smoke_runtime
       - run: python tools/build_release.py
       - run: python tools/sync_bootstrap.py --check
-      - run: bash -n bootstrap.sh install.sh
+      - run: for script in bootstrap.sh install.sh setup/install-root.sh; do bash -n "$script"; done
       - run: bash install.sh --check
       - run: git diff --exit-code -- MANIFEST.json

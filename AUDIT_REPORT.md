@@ -19,6 +19,9 @@
   uses a transaction-consistent snapshot. File replacement, links, and
   destructive restore targets are refused. Offline capture is required for a
   common consistency point across independent writers.
+- Applying an update now checks free space, syncs the rollback journal, and
+  preserves a frozen recovery process. Automatic installs must be enabled by
+  the owner, and the request path rejects a downgrade without explicit consent.
 
 ## Historical Stage 0 and iteration 2 baseline
 
@@ -210,7 +213,7 @@ security, performance, compatibility across independently modified
 installations and competitor comparisons require further work and/or
 independent verification.
 
-## Next work
+## Historical next-work notes
 
 Track implementation and acceptance gates in [ROADMAP.md](ROADMAP.md).
 Priority is to diagnose the single remaining test error, then establish a

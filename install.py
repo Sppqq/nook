@@ -128,6 +128,7 @@ def confirm_plan(args, target):
     print('  Голосовые ' + ('да' if args.voice else 'нет'))
     print('  Канал обновлений ' + CHANNEL_LABELS[getattr(args, 'channel', None) or 'stable'])
     print('  Закреплённая версия ' + (getattr(args, 'version', None) or 'нет'))
+    print('  Автообновления ' + getattr(args, 'auto_updates', 'off'))
     print('  GitHub    ' + {'owner': 'аккаунт хозяина', 'agent': 'отдельный аккаунт агента',
                              'skip': 'подключить позже'}[getattr(args, 'github_account', None) or 'skip'])
     print('  Автозапуск ' + ('подготовить без запуска' if args.no_start else 'systemd, запуск после установки'))
@@ -411,6 +412,8 @@ def setup_service(target, timezone, no_start, path_env):
         raise SystemExit('nook.service уже существует; он не перезаписан. Бот установлен без нового автозапуска.')
     service.write_text('[Unit]\nDescription=Nook Telegram assistant\nAfter=network-online.target\n\n[Service]\nType=simple\n'
                        + 'WorkingDirectory=' + str(target).replace('%', '%%') + '\n'
+                       + 'ExecStartPre=' + quote_unit(python) + ' ' + quote_unit(target / 'tools/start_guard.py')
+                       + ' ' + quote_unit(target) + '\n'
                        + 'ExecStart=' + quote_unit(python) + ' ' + quote_unit(target / 'bot.py') + '\n'
                        + 'Environment=' + quote_unit('PATH=' + path_env) + '\n'
                        + 'Environment=' + quote_unit('TZ=' + timezone) + '\n'
@@ -452,6 +455,8 @@ def main():
                     help='канал устанавливаемого релиза и будущих обновлений')
     ap.add_argument('--version', help='установить и закрепить указанную опубликованную версию')
     ap.add_argument('--dev', action='store_true', help='установить из текущего локального дерева разработки')
+    ap.add_argument('--auto-updates', choices=('off', 'notify', 'confirm', 'install'), default='off',
+                    help='режим автоматических обновлений (по умолчанию выключен)')
     ap.add_argument('--owner-id', type=int)
     ap.add_argument('--token-file', type=Path)
     args = ap.parse_args()
@@ -535,7 +540,7 @@ def main():
     from nook_update import record_install
     record_install(target)
     from nook_update import save_update_settings
-    save_update_settings(target, channel=args.channel, version_pin=args.version)
+    save_update_settings(target, channel=args.channel, version_pin=args.version, auto_mode=args.auto_updates)
     for folder in ('memory','logs','inbox','keys','spool/outbox','spool/mods','spool/root','tmp'):
         (target / folder).mkdir(parents=True, exist_ok=True)
     cfg = json.loads((target / 'config.example.json').read_text())

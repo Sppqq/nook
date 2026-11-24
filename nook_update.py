@@ -21,15 +21,15 @@ import urllib.request
 import uuid
 import zipfile
 
-from release_channels import (CHANNELS, channel_for_version, compare_versions,
+from release_channels import (CHANNELS, channel_for_version, compare_release_versions,
                               eligible_releases, installable_releases, select_release)
 
 ROOT = Path(__file__).resolve().parent
 REPO = 'Sppqq/nook'
 STATE = '.nook-install.json'
 UPDATE_SETTINGS = 'spool/updates/settings.json'
-AUTO_MODES = {'off', 'notify', 'confirm'}
-TOP = {'MANIFEST.json', 'README.md', 'CHANGELOG.md', 'CONTRIBUTING.md', 'LICENSE',
+AUTO_MODES = {'off', 'notify', 'confirm', 'install'}
+TOP = {'MANIFEST.json', 'VERSION', 'README.md', 'CHANGELOG.md', 'CONTRIBUTING.md', 'LICENSE',
        'SECURITY.md', '.gitignore', 'config.example.json', 'secrets.env.example',
        'requirements.txt', 'requirements-voice.txt', 'bootstrap.sh', 'install.sh'}
 # These paths are source only. In particular: no runtime templates are seeded,
@@ -41,6 +41,10 @@ class UpdateError(Exception):
     pass
 
 
+class UpdateBusy(UpdateError):
+    pass
+
+
 def digest(data):
     return hashlib.sha256(data).hexdigest()
 
@@ -49,16 +53,33 @@ def read_json(path):
     return json.loads(path.read_text())
 
 
+def sync_directory(path):
+    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def durable_directory(path, mode=0o700):
+    if path.is_dir():
+        return
+    durable_directory(path.parent)
+    path.mkdir(mode=mode, exist_ok=True)
+    sync_directory(path.parent)
+
+
 def atomic(path, data, mode=0o600):
-    path.parent.mkdir(parents=True, exist_ok=True)
+    durable_directory(path.parent)
     fd, name = tempfile.mkstemp(prefix='.nook-write-', dir=path.parent)
     try:
         with os.fdopen(fd, 'wb') as f:
             f.write(data)
+            os.fchmod(f.fileno(), mode)
             f.flush()
             os.fsync(f.fileno())
-        os.chmod(name, mode)
         os.replace(name, path)
+        sync_directory(path.parent)
     finally:
         if os.path.exists(name):
             os.unlink(name)
@@ -94,7 +115,7 @@ def path_at(root, name):
 
 def workspace(home):
     base = path_at(home, 'spool/updates')
-    base.mkdir(parents=True, exist_ok=True, mode=0o700)
+    durable_directory(base)
     return base
 
 
@@ -156,7 +177,7 @@ def lock(home):
         try:
             fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
-            raise UpdateError('Другое обновление уже выполняется.') from None
+            raise UpdateBusy('Другое обновление уже выполняется.') from None
         yield
 
 
@@ -446,27 +467,31 @@ def verify_source(source):
     return manifest
 
 
-def plan_source(home, source, revision, stage):
+def plan_source(home, source, revision, stage, *, allow_removals=False):
     base = baseline(home)
     manifest = verify_source(source)
     names = {n for n in manifest['sha256'] if managed(n)} | {'MANIFEST.json'}
     missing = set(base['files']) - names
-    if missing:
+    if missing and not allow_removals:
         raise UpdateError('Обновление удаляет старые файлы; нужна отдельная миграция.')
     for name in ('requirements.txt', 'requirements-voice.txt'):
         if path_at(home, name).read_bytes() != (source / name).read_bytes():
             raise UpdateError('Изменились зависимости. Нужна отдельная миграция окружения; бот сохранён.')
     changes, conflicts = {}, []
-    for name in sorted(names):
+    for name in sorted(names | missing):
         src = path_at(source, name)
-        data = rendered(src.read_bytes(), home)
-        wanted = digest(data)
+        data = rendered(src.read_bytes(), home) if name in names else None
+        wanted = digest(data) if data is not None else None
         dst = path_at(home, name)
         current = digest(dst.read_bytes()) if dst.is_file() else None
         old = base['files'].get(name)
-        if current == wanted:
+        if name == 'VERSION' and old is None and current is not None:
+            installed_version = read_json(path_at(home, 'MANIFEST.json')).get('version')
+            if isinstance(installed_version, str) and digest((installed_version + '\n').encode()) == current:
+                old = current
+        if current == wanted and name not in missing:
             continue
-        if old is not None and current != old:
+        if old is not None and current != old and not (name in missing and not dst.exists()):
             # Preserve a local edit when upstream did not change that file.
             if wanted == old:
                 continue
@@ -475,10 +500,11 @@ def plan_source(home, source, revision, stage):
         if old is None and dst.exists():
             conflicts.append(name)
             continue
-        prepared = path_at(stage / 'files', name)
-        atomic(prepared, data, src.stat().st_mode & 0o777)
+        mode = src.stat().st_mode & 0o777 if data is not None else 0
+        if data is not None:
+            atomic(path_at(stage / 'files', name), data, mode)
         changes[name] = {'before': current, 'after': wanted,
-                         'mode': src.stat().st_mode & 0o777}
+                         'mode': mode}
     if conflicts:
         raise UpdateError('Сохранены местные правки; обновление отменено. Конфликты: ' + ', '.join(conflicts[:12]))
     plan = {'schema': 1, 'id': stage.name, 'revision': revision, 'changes': changes,
@@ -496,6 +522,8 @@ def prepare(home, version=None):
     if version is not None:
         raise UpdateError('Сначала выбери канал обновлений для выбора версии.')
     with lock(home):
+        if update_settings(home) != settings:
+            raise UpdateError('Настройки обновления изменились. Повтори проверку.')
         baseline(home)  # Refuse private/unknown installs before downloading anything.
         base = workspace(home)
         if (base / 'transaction.json').exists():
@@ -505,11 +533,15 @@ def prepare(home, version=None):
         ident = uuid.uuid4().hex[:16]
         stage = base / 'staged' / ident
         stage.mkdir(parents=True, mode=0o700)
-        download('https://api.github.com/repos/' + REPO + '/commits/main', stage / 'commit.json', 2 * 1024 * 1024)
-        revision = read_json(stage / 'commit.json')['sha']
-        if not re.fullmatch('[a-f0-9]{40}', revision):
-            raise UpdateError('Некорректная версия GitHub.')
-        return prepare_stage(home, stage, revision)
+        try:
+            download('https://api.github.com/repos/' + REPO + '/commits/main', stage / 'commit.json', 2 * 1024 * 1024)
+            revision = read_json(stage / 'commit.json')['sha']
+            if not re.fullmatch('[a-f0-9]{40}', revision):
+                raise UpdateError('Некорректная версия GitHub.')
+            return prepare_stage(home, stage, revision)
+        except Exception:
+            shutil.rmtree(stage, ignore_errors=True)
+            raise
 
 
 def prepare_release(home, version=None):
@@ -520,6 +552,9 @@ def prepare_release(home, version=None):
             raise UpdateError('Сначала выбери канал обновлений.')
         if settings['paused']:
             raise UpdateError('Проверка обновлений приостановлена владельцем.')
+        if version and settings['version_pin'] and version != settings['version_pin']:
+            raise UpdateError('Чтобы выбрать другую версию, сначала сними закрепление.')
+        version = version or settings['version_pin']
         base = workspace(home)
         if (base / 'transaction.json').exists():
             txn = read_json(base / 'transaction.json')
@@ -534,12 +569,14 @@ def prepare_release(home, version=None):
         stage.mkdir(parents=True, mode=0o700)
         try:
             source, revision = fetch_release_source(release, stage)
-            plan = plan_source(home, source, revision, stage)
             current_version = read_json(path_at(home, 'MANIFEST.json')).get('version')
             try:
-                plan['downgrade'] = compare_versions(release['version'], current_version) < 0
+                downgrade = compare_release_versions(release['version'], current_version) < 0
             except (TypeError, ValueError):
                 raise UpdateError('Не удалось безопасно сравнить текущую и выбранную версии.') from None
+            plan = plan_source(home, source, revision, stage, allow_removals=downgrade)
+            plan['downgrade'] = downgrade
+            plan['release_settings'] = settings
             plan['current_version'] = current_version
             plan['version'] = release['version']
             plan['release_name'] = str(release.get('name') or '')[:200]
@@ -555,7 +592,11 @@ def prepare_release(home, version=None):
 def get_plan(home, ident):
     if not re.fullmatch('[a-f0-9]{16}', ident):
         raise UpdateError('Некорректный номер обновления.')
-    stage = path_at(workspace(home), 'staged/' + ident)
+    base = workspace(home)
+    txn_path = path_at(base, 'transaction.json')
+    if txn_path.exists() and read_json(txn_path)['status'] not in {'success', 'rolled_back'}:
+        raise UpdateError('Сначала восстанови незавершённое обновление.')
+    stage = path_at(base, 'staged/' + ident)
     plan = read_json(path_at(stage, 'plan.json'))
     if plan['id'] != ident or time.time() - plan['created'] > 3600:
         raise UpdateError('Проверка устарела. Сначала проверь обновления ещё раз.')
@@ -566,12 +607,10 @@ def get_plan(home, ident):
         if current_settings['channel'] is not None:
             raise UpdateError('Канал изменился после проверки. Проверь обновление заново.')
     else:
-        if (current_settings['channel'] is None
-                or CHANNELS.index(plan['channel']) > CHANNELS.index(current_settings['channel'])):
+        if current_settings['channel'] != (plan.get('release_settings') or {}).get('channel'):
             raise UpdateError('Выбранный канал изменился после проверки. Проверь обновление заново.')
-        if (current_settings['version_pin'] is not None
-                and current_settings['version_pin'] != plan.get('version')):
-            raise UpdateError('Закреплённая версия изменилась после проверки.')
+        if current_settings != plan['release_settings']:
+            raise UpdateError('Настройки обновления изменились после проверки.')
     for name, item in plan['changes'].items():
         if not managed(name):
             raise UpdateError('Защищённый путь в плане обновления.')
@@ -579,19 +618,24 @@ def get_plan(home, ident):
         actual = digest(current.read_bytes()) if current.is_file() else None
         if actual != item['before']:
             raise UpdateError('После проверки файл изменился: ' + name)
-        if digest(path_at(stage / 'files', name).read_bytes()) != item['after']:
+        if item['after'] is not None and digest(path_at(stage / 'files', name).read_bytes()) != item['after']:
             raise UpdateError('Подготовленный файл повреждён: ' + name)
     if baseline(home) != plan['baseline']:
         raise UpdateError('Установленная версия изменилась после проверки.')
     return stage, plan
 
 
-def request(home, ident):
+def request(home, ident, *, allow_downgrade=False):
     with lock(home):
         _, plan = get_plan(home, ident)
+        if plan.get('downgrade') and not allow_downgrade:
+            raise UpdateError('Для перехода на старую версию нужно отдельное подтверждение.')
         if not plan['changes']:
             return False
-        json_write(workspace(home) / 'request.json', {'id': ident})
+        pending = path_at(workspace(home), 'request.json')
+        if pending.exists() and read_json(pending)['id'] != ident:
+            raise UpdateError('Другое обновление уже поставлено в очередь.')
+        json_write(pending, {'id': ident, 'allow_downgrade': allow_downgrade})
         return True
 
 
@@ -600,28 +644,51 @@ def apply_files(home, ident):
     stage, plan = get_plan(home, ident)
     base = workspace(home)
     backup = base / 'backups' / ident
-    backup.mkdir(parents=True, mode=0o700)
     changes = dict(plan['changes'])
     state = dict(plan['baseline'], files=dict(plan['baseline']['files']), revision=plan['revision'])
     for name, item in changes.items():
-        state['files'][name] = item['after']
+        if item['after'] is None:
+            state['files'].pop(name, None)
+        else:
+            state['files'][name] = item['after']
     state_data = (json.dumps(state, ensure_ascii=False, indent=2) + '\n').encode()
     old_state = path_at(home, STATE)
     changes[STATE] = {'before': digest(old_state.read_bytes()) if old_state.exists() else None,
                       'after': digest(state_data), 'mode': 0o600}
     txn = {'id': ident, 'revision': plan['revision'], 'status': 'applying', 'files': changes, 'written': []}
-    # Complete backups before the first live write.
+    required = len(state_data) + 16 * 1024 * 1024
     for name, item in changes.items():
         if item['before'] is not None:
-            p = path_at(home, name)
-            saved = path_at(backup, name)
-            atomic(saved, p.read_bytes(), p.stat().st_mode & 0o777)
-    json_write(base / 'transaction.json', txn)
+            required += path_at(home, name).stat().st_size
+        if name != STATE and item['after'] is not None:
+            required += path_at(stage / 'files', name).stat().st_size
+    if shutil.disk_usage(home).free < required:
+        raise UpdateError('Недостаточно места для резервной копии кода и обновления.')
+    durable_directory(backup.parent)
+    backup.mkdir(mode=0o700)
+    sync_directory(backup.parent)
+    # Complete backups before the first live write.
+    try:
+        for name, item in changes.items():
+            if item['before'] is not None:
+                p = path_at(home, name)
+                saved = path_at(backup, name)
+                atomic(saved, p.read_bytes(), p.stat().st_mode & 0o777)
+        json_write(base / 'transaction.json', txn)
+    except Exception:
+        if not (base / 'transaction.json').exists() or read_json(base / 'transaction.json')['id'] != ident:
+            shutil.rmtree(backup, ignore_errors=True)
+        raise
     for name, item in changes.items():
         txn['written'].append(name)
         json_write(base / 'transaction.json', txn)
-        data = state_data if name == STATE else path_at(stage / 'files', name).read_bytes()
-        atomic(path_at(home, name), data, item['mode'])
+        target = path_at(home, name)
+        if item['after'] is None:
+            target.unlink(missing_ok=True)
+            sync_directory(target.parent)
+        else:
+            data = state_data if name == STATE else path_at(stage / 'files', name).read_bytes()
+            atomic(target, data, item['mode'])
     txn['status'] = 'awaiting_health'
     json_write(base / 'transaction.json', txn)
     return txn
@@ -649,6 +716,7 @@ def restore(home):
         if item['before'] is None:
             if p.exists():
                 p.unlink()  # Only our own newly installed source files.
+                sync_directory(p.parent)
         else:
             saved = path_at(backup, name)
             atomic(p, saved.read_bytes(), saved.stat().st_mode & 0o777)
@@ -734,12 +802,21 @@ def notify(home, message):
 
 def worker(home, ident, pid):
     with lock(home):
-        get_plan(home, ident)
+        _, plan = get_plan(home, ident)
         service_matches(home, pid)
         # Everything required for rollback is in this independent transient unit.
         pending = path_at(workspace(home), 'request.json')
         if pending.exists():
+            approval = read_json(pending)
+            if approval.get('id') != ident:
+                raise UpdateError('Запрос на обновление изменился.')
+        else:
+            approval = {}
+        if plan.get('downgrade') and approval.get('allow_downgrade') is not True:
+            raise UpdateError('Для перехода на старую версию нужно отдельное подтверждение.')
+        if pending.exists():
             pending.unlink()
+            sync_directory(pending.parent)
         stopped = False
         try:
             systemctl('stop', 'nook.service')
@@ -772,19 +849,38 @@ def worker(home, ident, pid):
             raise
 
 
-def launch(home, ident, pid):
-    service_matches(home, pid)
-    stage, _ = get_plan(home, ident)
+def freeze_supervisor(stage):
     # Freeze supervisor code outside the files being replaced. User systemd keeps
     # this process alive while stopping/restarting the bot's own service.
     supervisor = stage / 'worker.py'
     atomic(supervisor, Path(__file__).read_bytes())
+    atomic(stage / 'release_channels.py', Path(__file__).with_name('release_channels.py').read_bytes())
+    return supervisor
+
+
+def launch(home, ident, pid):
+    service_matches(home, pid)
+    stage, _ = get_plan(home, ident)
+    supervisor = freeze_supervisor(stage)
     p = subprocess.run(['systemd-run', '--user', '--collect', '--quiet',
         '--unit=nook-update-' + ident, '--property=UMask=0077', sys.executable,
         str(supervisor), '--home', str(home), '_worker', ident, '--pid', str(pid)],
         capture_output=True, timeout=20)
     if p.returncode:
         raise UpdateError('Не удалось запустить независимый обновлятор. Бот не изменён.')
+
+
+def recover_interrupted(home):
+    txn_path = path_at(workspace(home), 'transaction.json')
+    try:
+        with lock(home):
+            if txn_path.exists() and read_json(txn_path)['status'] in ('applying', 'awaiting_health'):
+                with runtime_lock(home):
+                    restore(home)
+    except UpdateBusy:
+        # The live supervisor legitimately starts the service during its health check.
+        if not txn_path.exists() or read_json(txn_path)['status'] == 'applying':
+            raise
 
 
 def main():
@@ -797,15 +893,18 @@ def main():
     req = sub.add_parser('request')
     req.add_argument('id')
     req.add_argument('--yes', action='store_true', required=True)
+    req.add_argument('--allow-downgrade', action='store_true')
     apply = sub.add_parser('apply-offline')
     apply.add_argument('id')
     apply.add_argument('--yes', action='store_true', required=True)
+    apply.add_argument('--allow-downgrade', action='store_true')
     sub.add_parser('status')
     roll = sub.add_parser('rollback-offline')
     roll.add_argument('--yes', action='store_true', required=True)
     work = sub.add_parser('_worker')
     work.add_argument('id')
     work.add_argument('--pid', type=int, required=True)
+    sub.add_parser('_recover')
     args = ap.parse_args()
     home = args.home.expanduser().resolve()
     os.umask(0o077)
@@ -825,13 +924,20 @@ def main():
                            'name': item.get('name'), 'published_at': item.get('published_at')}
                           for item in releases[:20]], ensure_ascii=False))
     elif args.command == 'request':
-        print('Обновление запрошено; мод дождётся завершения задач.' if request(home, args.id) else 'Обновлений нет.')
+        queued = request(home, args.id, allow_downgrade=args.allow_downgrade)
+        print('Обновление запрошено; мод дождётся завершения задач.' if queued else 'Обновлений нет.')
     elif args.command == '_worker':
         worker(home, args.id, args.pid)
+    elif args.command == '_recover':
+        recover_interrupted(home)
     elif args.command in ('apply-offline', 'rollback-offline'):
         with lock(home), runtime_lock(home):
             offline(home)
             if args.command == 'apply-offline':
+                stage, plan = get_plan(home, args.id)
+                if plan.get('downgrade') and not args.allow_downgrade:
+                    raise UpdateError('Для перехода на старую версию нужен флаг --allow-downgrade.')
+                freeze_supervisor(stage)
                 try:
                     apply_files(home, args.id)
                     txn_path = workspace(home) / 'transaction.json'

@@ -1,6 +1,6 @@
 import unittest
 
-from release_channels import (CHANNELS, channel_for_version, compare_versions,
+from release_channels import (CHANNELS, channel_for_version, compare_release_versions, compare_versions,
                               eligible_releases, select_release)
 
 
@@ -44,6 +44,14 @@ class ReleaseChannelTests(unittest.TestCase):
             select_release(self.releases(), 'stable', '1.3.0-rc.1')
         with self.assertRaises(ValueError):
             channel_for_version('1.2.0-preview.1')
+
+    def test_promotion_order_within_nightly_channel(self):
+        versions = ['1.2.0-nightly.20261124', '1.2.0-alpha.1', '1.2.0-beta.1',
+                    '1.2.0-rc.1', '1.2.0']
+        releases = [{'tag_name': 'v' + version, 'prerelease': '-' in version} for version in versions]
+        self.assertEqual([item['version'] for item in eligible_releases(releases, 'nightly')], versions[::-1])
+        for earlier, later in zip(versions, versions[1:]):
+            self.assertLess(compare_release_versions(earlier, later), 0)
 
     def test_invalid_channel_and_leading_zero_rejected(self):
         with self.assertRaises(ValueError):

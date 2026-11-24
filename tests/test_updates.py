@@ -152,6 +152,55 @@ class UpdateTests(unittest.TestCase):
         self.assertEqual((self.home / 'bot.py').read_text(), 'print("old")\n')
         self.assert_private()
 
+    def test_frozen_worker_recovers_boot_without_loading_updated_source(self):
+        from tools.start_guard import recover
+
+        self.publish(**{'bot.py': 'raise RuntimeError("unhealthy release")\n'})
+        self.plan()
+        u.freeze_supervisor(self.stage)
+        u.apply_files(self.home, self.ident)
+        self.assertTrue(recover(self.home))
+        self.assertEqual((self.home / 'bot.py').read_text(), 'print("old")\n')
+        self.assertEqual(u.read_json(u.workspace(self.home) / 'transaction.json')['status'], 'rolled_back')
+        self.assertFalse(recover(self.home))
+        self.assert_private()
+
+    def test_low_disk_and_offline_fail_without_changing_live_files(self):
+        self.publish(**{'bot.py': 'print("new")\n'})
+        self.plan()
+        with patch.object(u.shutil, 'disk_usage', return_value=SimpleNamespace(free=1024)):
+            with self.assertRaisesRegex(u.UpdateError, 'Недостаточно места'):
+                u.apply_files(self.home, self.ident)
+        self.assertFalse((u.workspace(self.home) / 'transaction.json').exists())
+        with patch.object(u, 'download', side_effect=OSError('offline')):
+            with self.assertRaisesRegex(OSError, 'offline'):
+                u.prepare(self.home)
+        self.assertEqual({path.name for path in self.stage.parent.iterdir()}, {self.ident})
+        self.assertEqual((self.home / 'bot.py').read_text(), 'print("old")\n')
+        self.assert_private()
+
+    def test_downgrade_can_remove_only_unmodified_managed_files(self):
+        del self.files['mods/bundled.py']
+        (self.source / 'mods/bundled.py').unlink()
+        self.publish()
+        local = self.home / 'mods/bundled.py'
+        local.write_text('OWNER_EDIT = True\n')
+        with self.assertRaisesRegex(u.UpdateError, 'Конфликты'):
+            u.plan_source(self.home, self.source, 'b' * 40, self.stage, allow_removals=True)
+        local.write_text('VALUE=1\n')
+        plan = u.plan_source(self.home, self.source, 'b' * 40, self.stage, allow_removals=True)
+        plan['downgrade'] = True
+        u.json_write(self.stage / 'plan.json', plan)
+        with self.assertRaisesRegex(u.UpdateError, 'отдельное подтверждение'):
+            u.request(self.home, self.ident)
+        self.assertTrue(u.request(self.home, self.ident, allow_downgrade=True))
+        u.apply_files(self.home, self.ident)
+        self.assertFalse(local.exists())
+        self.assertNotIn('mods/bundled.py', u.baseline(self.home)['files'])
+        u.restore(self.home)
+        self.assertEqual(local.read_text(), 'VALUE=1\n')
+        self.assert_private()
+
     def test_rollback_does_not_overwrite_later_owner_edit(self):
         self.publish(**{'bot.py': 'print("new")\n'})
         self.plan()

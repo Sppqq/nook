@@ -8,7 +8,12 @@ import time
 
 import backup_manager
 import nook_update
-from release_channels import CHANNEL_LABELS, eligible_releases
+from release_channels import CHANNEL_LABELS, eligible_releases, installable_releases
+
+AUTO_LABELS = {'off': 'Выключено', 'notify': 'Только уведомления',
+               'confirm': 'Установка после подтверждения',
+               'install': 'Автоматическая установка новой версии'}
+CHECK_INTERVAL = 12 * 60 * 60
 
 
 def setup(m):
@@ -29,11 +34,7 @@ def setup(m):
     def menu_text():
         current = settings()
         pin = current['version_pin'] or 'не закреплена'
-        mode = {
-            'off': 'выключено',
-            'notify': 'только уведомления',
-            'confirm': 'установка после подтверждения',
-        }[current['auto_mode']]
+        mode = AUTO_LABELS[current['auto_mode']]
         return ('🔄 **Обновления Nook**\n\n'
                 f"Текущая версия: `{local_version()}`\n"
                 f"Канал: **{channel_name(current['channel'])}**\n"
@@ -86,7 +87,7 @@ def setup(m):
             return await ctx.reply('Сначала выбери канал обновлений. До этого сохраняется прежний режим.')
         try:
             releases = await asyncio.to_thread(nook_update.list_releases)
-            choices = eligible_releases(releases, current['channel'])[:8]
+            choices = eligible_releases(installable_releases(releases), current['channel'])[:8]
         except Exception as exc:
             m.log.warning('Release listing failed: %s', type(exc).__name__)
             return await ctx.reply('Не удалось получить релизы GitHub. Настройки не изменены.')
@@ -211,12 +212,12 @@ def setup(m):
 
     @m.callback('confirm-downgrade')
     async def confirm_downgrade(ctx):
-        await queue_install(ctx)
+        await queue_install(ctx, allow_downgrade=True)
 
-    async def queue_install(ctx):
+    async def queue_install(ctx, *, allow_downgrade=False):
         try:
             await asyncio.to_thread(nook_update.service_matches, home, os.getpid())
-            queued = await asyncio.to_thread(nook_update.request, home, ctx.arg)
+            queued = await asyncio.to_thread(nook_update.request, home, ctx.arg, allow_downgrade=allow_downgrade)
             await ctx.edit('Обновление поставлено в очередь. Оно начнётся после завершения активных задач; '
                            'независимый updater проверит запуск и восстановит предыдущий код при ошибке.'
                            if queued else 'Изменений нет.')
@@ -226,21 +227,17 @@ def setup(m):
     @m.callback('auto-menu')
     async def auto_menu(ctx):
         current = settings()
-        labels = {'off': 'Выключено', 'notify': 'Только уведомления',
-                  'confirm': 'Установка после подтверждения'}
-        rows = [[m.btn(label, 'set-auto', mode)] for mode, label in labels.items()]
-        await ctx.reply('Автоматическая проверка выполняется раз в 12 часов. Установка всегда требует '
-                        'явного подтверждения и проверку активных задач.\nТекущий режим: **'
-                        + labels.get(current['auto_mode'], 'неподдерживается') + '**', rows)
+        rows = [[m.btn(label, 'set-auto', mode)] for mode, label in AUTO_LABELS.items()]
+        await ctx.reply('Проверка выполняется раз в 12 часов. Автоустановка ждёт завершения задач и '
+                        'проверяет запуск. Для перехода на старую версию нужно отдельное подтверждение.\n'
+                        'Текущий режим: **' + AUTO_LABELS[current['auto_mode']] + '**', rows)
 
     @m.callback('set-auto')
     async def set_auto(ctx):
         try:
             current = await asyncio.to_thread(nook_update.save_update_settings, home,
                                               auto_mode=ctx.arg)
-            labels = {'off': 'выключено', 'notify': 'только уведомления',
-                      'confirm': 'установка после подтверждения'}
-            await ctx.edit('Режим автообновлений: **' + labels[current['auto_mode']] + '**.')
+            await ctx.edit('Режим автообновлений: **' + AUTO_LABELS[current['auto_mode']] + '**.')
         except nook_update.UpdateError as exc:
             await ctx.reply(str(exc))
 
@@ -260,6 +257,7 @@ def setup(m):
         # Reserve both agent lanes before yielding to queued agent work.
         for lane in lanes:
             await lane.lock.acquire()
+        m.core.backup_active = True
         try:
             await ctx.toast('Создаю и проверяю резервную копию…')
             task = asyncio.create_task(asyncio.to_thread(backup_manager.create_backup, home, online=True))
@@ -275,6 +273,7 @@ def setup(m):
         except backup_manager.BackupError as exc:
             await ctx.reply('Резервная копия не создана: ' + str(exc))
         finally:
+            m.core.backup_active = False
             for lane in reversed(lanes):
                 lane.lock.release()
 
@@ -298,18 +297,18 @@ def setup(m):
                         '`systemctl --user start nook.service`\n\n'
                         'Откат откажется перезаписывать изменения, сделанные после обновления.')
 
-    @m.every(12 * 60 * 60)
+    @m.every(CHECK_INTERVAL)
     async def scheduled_check():
         current = settings()
         if (current['channel'] is None or current['paused']
                 or current['auto_mode'] == 'off'):
             return
-        today = time.strftime('%Y-%m-%d')
-        if m.state.get('last_check_day') == today:
+        now = time.time()
+        if now - m.state.get('last_check', 0) < CHECK_INTERVAL:
             return
         try:
             plan = await asyncio.to_thread(nook_update.prepare, home, current['version_pin'])
-            m.state['last_check_day'] = today
+            m.state['last_check'] = now
             m.save()
             if not plan['changes']:
                 return
@@ -321,6 +320,12 @@ def setup(m):
                 buttons = [[m.btn('Установить с проверкой', 'install-update', plan['id'])]]
             if plan.get('downgrade'):
                 text += ' Это downgrade; требуется ручная проверка и отдельное подтверждение.'
+            elif current['auto_mode'] == 'install' and m.state.get('last_auto_revision') != plan['revision']:
+                await asyncio.to_thread(nook_update.service_matches, home, os.getpid())
+                if await asyncio.to_thread(nook_update.request, home, plan['id']):
+                    m.state['last_auto_revision'] = plan['revision']
+                    m.save()
+                    return await m.send(text + ' Установка поставлена в очередь.')
             await m.send(text, buttons)
         except nook_update.UpdateError as exc:
             m.log.warning('Scheduled update check refused: %s', exc)

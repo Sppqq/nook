@@ -83,6 +83,20 @@ def channel_for_version(value):
     raise ValueError('Недопустимый формат предварительной версии.')
 
 
+def compare_release_versions(left, right):
+    a, b = parse_version(left), parse_version(right)
+    if (a.major, a.minor, a.patch) == (b.major, b.minor, b.patch):
+        try:
+            first = CHANNELS.index(channel_for_version(left))
+            second = CHANNELS.index(channel_for_version(right))
+        except ValueError:
+            pass  # Older installations can report a SemVer prerelease outside Nook's five channels.
+        else:
+            if first != second:
+                return (first < second) - (first > second)
+    return compare_versions(left, right)
+
+
 def normalize_release(release):
     if not isinstance(release, dict) or release.get('draft') is True:
         return None
@@ -145,4 +159,4 @@ class _VersionKey:
         self.value = value
 
     def __lt__(self, other):
-        return compare_versions(self.value, other.value) < 0
+        return compare_release_versions(self.value, other.value) < 0

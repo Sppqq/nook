@@ -18,6 +18,9 @@
 - Ubuntu 24.04 passed all 11 backup tests, including a live WAL with an
   uncommitted transaction, restoring a customized instance, and an age
   encrypt/verify/restore round trip with a disposable key.
+- Added a crash-durable journal, frozen updater startup recovery, low-space
+  preflight, explicit downgrade approval, and owner-controlled unattended
+  upgrades. New configurations default to off.
 
 ## Historical baseline — 2026-11-24, iteration 2
 

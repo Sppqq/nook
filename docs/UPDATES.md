@@ -17,15 +17,18 @@
 ### Порядок обновления
 
 1. В старом режиме загружается конкретный коммит `main`. Для выбранного канала Nook проверяет релиз, тег, SHA-256, архив и Sigstore-аттестацию официального workflow. Для проверки происхождения установи актуальный GitHub CLI (`gh`). Вход в GitHub не требуется.
-2. Изменения зависимостей, удаление старых исходников или несовместимый `update_api` требуют отдельной миграции. Автоматическое обновление их не выполняет.
+2. Изменения зависимостей и несовместимый `update_api` требуют отдельной миграции. При подтверждённом переходе на старый релиз удаляются только неизменённые файлы программы из установочного эталона. Конфликт с местной правкой останавливает переход.
 3. Подтверждённая версия ждёт завершения активных задач и очереди. Проверка действительна час; потом её нужно повторить.
 4. Отдельный пользовательский процесс systemd останавливает именно `nook.service` этой установки. Блокировка не позволяет менять исходники, пока новый бот с этой блокировкой работает.
 5. До первой записи сохраняются старые файлы, права и журнал операции в `spool/updates/backups/<номер>`. Меняются только файлы программы; установщик не запускается.
 6. Бот запускается. Обновлятор ждёт успешного обращения бота к Telegram, загрузки модов без ошибок, свежего сигнала от правильного процесса/версии и 20 секунд устойчивой работы. При неудаче восстанавливает старый код и запускает прежнюю службу. Результат приходит в Telegram.
 
 Проверка релиза связывает архив с подписанным workflow, версией и commit
-тега. Автоматические проверки по умолчанию выключены. Доступны уведомления
-или показ проверенного плана с подтверждением.
+тега. Автообновления по умолчанию выключены. Владелец может выбрать
+уведомления, установку после подтверждения или автоустановку новой версии.
+Последняя ждёт завершения задач и использует те же проверки и откат. Переход
+на старую версию всегда подтверждается отдельно. При первой установке режим
+можно выбрать флагом `--auto-updates off|notify|confirm|install`.
 
 Автоматический перезапуск поддерживает установку через пользовательскую `nook.service`. PM2, контейнеры, вручную запущенные боты и исходный частный Домовой требуют отдельной адаптации. Нельзя подменять их публичным Nook поверх неизвестной структуры.
 
@@ -41,6 +44,7 @@
 bin/nook-update check
 # Подставь id из результата проверки; это явное согласие на эту версию:
 bin/nook-update request <id> --yes
+# Для явного перехода на старую версию добавь --allow-downgrade.
 bin/nook-update status
 bin/nook-backup create --offline
 bin/nook-backup verify spool/backups/nook-backup-....tar.gz
@@ -68,25 +72,41 @@ systemctl --user start nook.service
 
 `apply-offline <id> --yes` — отдельный режим для администратора при остановленном боте; он не запускает службу и не проверяет её здоровье. Последующие местные правки блокируют откат, чтобы не потерять их. Резервные копии автоматически не удаляются.
 
-Проверка запуска не доказывает исправность всех функций. Поломка после окна проверки, несовместимый сторонний мод, потеря питания или принудительное завершение независимого обновлятора могут потребовать ручного восстановления. Журнал записи позволяет восстановить и частично записанное обновление. Нужны собственные бэкапы; обещания «никогда ничего не сломается» здесь нет.
+Новая `nook.service` проверяет журнал перед запуском бота. После прерывания
+обновления она запускает сохранённую копию обновлятора и восстанавливает
+предыдущий код. Существующие unit-файлы не переписываются. При первой
+миграции со старого обновлятора или если изменены файлы журнала, используй
+офлайн-откат и проверенный архив. Ошибку, которая проявилась после окна
+проверки, можно откатить отдельно.
 
 ## English
 
 Open **More → Mods → Обновления и резервные копии** to select a channel, review releases, pin a version and configure checks. The installer fetches the newest eligible published release for the selected channel. `bootstrap.sh --version X` installs and pins exact published version `X`. Use `--dev` for a development installation. Release installs and updates require a current GitHub CLI (`gh`) for Sigstore verification without login. Confirm updates separately from the installer.
 
-The updater downloads a pinned commit from `Sppqq/nook`, validates archive paths, the complete integrity manifest and Python syntax, and plans source changes against the installed hashes. Local changes are retained; a conflicting upstream change or a new upstream file colliding with a custom file cancels the update. Dependencies, source deletions, and incompatible update API versions require a separate migration.
+The updater plans source changes against the installed hashes. Local
+modifications and custom files are preserved. A conflict stops the update.
+Dependency and update API changes require separate migration. An explicitly
+approved downgrade can remove unchanged managed source paths.
 
 Configuration, secrets, state, memory, conversations, jobs, SSH keys/nodes, provider configuration, `AGENTS.md`, the virtual environment, and systemd configuration are preserved. Runtime templates are never reseeded. Custom mods and skills are preserved or cause an explicit conflict. The installer records hashes after rendering local paths.
 
 Once confirmed, the enabled `self_update` mod waits for active and queued agent work to finish and reserves both agent lanes. An independent user-systemd process stops this installation's `nook.service`, backs up every affected source file and its permissions, writes a persistent transaction journal, applies the source changes, and restarts the bot. The bot and updater share a process lock. The check expires after one hour.
 
-The supervisor requires successful bot startup with Telegram, no failed mods, matching fresh process/version health signals, and 20 seconds of stable operation. Failed startup triggers source rollback and a restart of the previous service. The result is sent to the owner. Backups live in `spool/updates/backups/<id>` and are not automatically deleted.
+The supervisor requires successful bot startup with Telegram, no failed
+mods, matching fresh process/version health signals, and 20 seconds of
+stable operation. Failed startup triggers rollback and restarts the previous
+service. New systemd units run a pre-start guard that invokes the frozen
+updater after an interrupted transaction. Existing unit files stay intact.
+Automatic updates are off by default. An owner can choose notification,
+confirmation or unattended upgrade. Downgrades always require approval.
 
 Automatic service updates support the installer's user `nook.service`; PM2, containers, manual launches and the original private Domovoy need separate adaptation. Older Nook installations without the updater require a reviewed initial migration. Do not establish a clean baseline from arbitrary local files to bypass conflicts; older raw manifests cannot identify all rendered files as unchanged.
 
 From the installed directory, use `bin/nook-update check`, then `bin/nook-update request <id> --yes`, and `bin/nook-update status`. Stop the service and external writers for an offline instance snapshot. Online backup from Telegram reserves the agent lanes, uses SQLite's Backup API, and fails if other captured files change. External provider data is opt-in via `--include-providers` and restores under `provider-home/`. Use age recipient and identity options to encrypt and verify backups, `--keep N` to rotate after verification, and the `--max-*` options to support larger instances. For manual recovery, stop `nook.service`, run `bin/nook-update rollback-offline --yes`, and start it again. `apply-offline <id> --yes` is for administrators with a stopped bot and does not perform startup health checks. Rollback refuses to overwrite edits made after the update.
 
-This is source rollback, not a guarantee that every feature works. Later failures, third-party incompatibilities, power loss or termination of the independent supervisor can require manual recovery using the persistent journal. Keep independent backups. Downloads trust GitHub and this repository's maintainers over HTTPS; the manifest is an integrity check, not an independent signature.
+The journal and source backups can recover interrupted code changes. Keep a
+separate instance backup for restoring runtime data. The initial migration
+from a legacy updater can require manual offline recovery.
 
 Channel policy and release workflow: [RELEASE_POLICY.md](../RELEASE_POLICY.md). The release workflow validates tags and tests before publishing `.zip`, `source.json` and `SHA256SUMS`; same-artifact promotion and detached signatures are not yet implemented.
 

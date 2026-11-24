@@ -14,8 +14,11 @@
   PR #7 reported `action_required`.
 - Backups use SQLite snapshots, reject changed non-SQLite files, and support
   offline capture, age encryption, retention and explicit provider opt-in.
-- The next implementation steps are the disposable update/recovery matrix and
-  the remaining architecture work below.
+- The updater now binds staged plans to settings, supports explicit downgrade,
+  and recovers incomplete transactions through a frozen supervisor. Automatic
+  updates default to off.
+- Live GitHub publication, production-like provider authentication and
+  broader architecture, performance, coverage and localization work remain.
 
 ## Principles
 
@@ -58,7 +61,7 @@
   test-coverage measurement, fresh-OS install, real Telegram test, independent
   penetration test or full migration/rollback drill has been performed.
 
-## Priorities
+## Historical iteration 1 and 2 progress
 
 ## Completed in this iteration
 

@@ -29,8 +29,8 @@ import urllib.request
 # BEGIN PINNED LOADER
 files = {
     'installer_source.py': ('6e567ca99a158bf39bd77f37e98676a0546849fb', 'c71e74089fce93f4432c32a7b216211964c6f812fa09d9ee8b789b04ea2fa1fa'),
-    'nook_update.py': ('0e20bdbfebef11994953bbb63f81cc4d0bb57e8a', '6117144486fe00bff3018931cb47784a06a3dcc54ea63a515418dfaefa6ae746'),
-    'release_channels.py': ('ce5ca3b34543de957466017f503737b2b16d17ff', '63b1d1524783a978ad4cf61e57e62d97627a44e7e0b594a3166cc278a371032c'),
+    'nook_update.py': ('a66d59a28e82af2ad3375631569622413de390a9', 'c823081c87846887670391f6cd0a4561a2eff5f3cfdbad2366aa193bc41196a0'),
+    'release_channels.py': ('9cdcc152efa696fb2d6d0d4ab0798d253ead723e', '7bdda296f51f59ff61e25dc8a8b6fb9b784620ca2fb6bf119895e34faae501f6'),
 }
 # END PINNED LOADER
 

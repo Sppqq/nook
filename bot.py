@@ -20,6 +20,12 @@ import uuid
 from base64 import b64encode
 from urllib.request import Request, urlopen
 
+if __name__ == '__main__':
+    from tools.start_guard import recover
+
+    if recover(Path(__file__).resolve().parent):
+        os.execv(sys.executable, [sys.executable, *sys.argv])
+
 import aiohttp
 
 # Private runtime files also stay private when launched outside systemd.
@@ -4840,10 +4846,10 @@ async def mods_loop():
     while True:
         try:
             heartbeat(Path(HOME), REG.failed)
-            if os.path.exists(modsys.RELOAD_FLAG):
+            if not getattr(core, 'backup_active', False) and os.path.exists(modsys.RELOAD_FLAG):
                 os.remove(modsys.RELOAD_FLAG)
                 await mods_reload()
-            if not good_saved and time.time() - started > 60:  # прожили минуту — эту версию ядра считаем рабочей
+            if not getattr(core, 'backup_active', False) and not good_saved and time.time() - started > 60:
                 shutil.copy2(os.path.join(HOME, "bot.py"), os.path.join(modsys.SPOOL, "bot.py.good"))
                 good_saved = True
             if os.path.exists(modsys.RESTART_FLAG) and not (user_lane.current or bg_lane.current

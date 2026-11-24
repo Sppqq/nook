@@ -62,7 +62,9 @@ and access to Sigstore trust metadata. No user GitHub login is used.
 | Alpha | `1.2.0-alpha.1` | Stable, RC, Beta |
 | Nightly | `1.2.0-nightly.20261124` | Stable, RC, Beta, Alpha |
 
-Version selection uses SemVer precedence and excludes drafts, inconsistent
+Version selection compares major/minor/patch first. Within one version
+series, promotion order takes precedence across channels and SemVer orders
+revisions within each channel. Selection excludes drafts, inconsistent
 metadata and releases without the required assets. Choose a channel before
 downloading. `--version` installs and pins an exact published release.
 `--dev` explicitly installs a development checkout or snapshot. Older
