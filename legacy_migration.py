@@ -547,8 +547,10 @@ def _write_journal(path, value):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(path.name + '.tmp')
+    if temporary.is_symlink():
+        raise MigrationError('Небезопасная ссылка вместо временного журнала.')
     data = (json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2) + '\n').encode()
-    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, 'O_NOFOLLOW', 0), 0o600)
     try:
         with os.fdopen(fd, 'wb') as stream:
             stream.write(data)
@@ -568,10 +570,30 @@ def _inventory_digest(inventory):
     return hashlib.sha256(json.dumps(inventory, sort_keys=True).encode()).hexdigest()
 
 
+def _matches_snapshot_excluding_stage_changes(snapshot, stage, changed):
+    baseline, candidate = _inventory(snapshot), _inventory(stage)
+    changed = set(changed) | {'.nook-install.json', 'spool/migrations/legacy-source-plan.json'}
+    changed_dirs = {str(PurePosixPath(name).parent) for name in changed}
+    paths = set(baseline) | set(candidate)
+    for name in paths:
+        if name == '.venv' or name.startswith('.venv/') or name in changed:
+            continue
+        if name in changed_dirs:
+            continue
+        if (baseline.get(name, candidate.get(name, {})).get('kind') == 'dir'
+                and any(path.startswith(name + '/') for path in changed)):
+            continue
+        if baseline.get(name) != candidate.get(name):
+            return False
+    return True
+
+
 def recover_transaction(journal, *, stop_service, start_service):
     """Restore the pre-migration tree after interruption at any switch boundary."""
     journal = Path(journal)
     try:
+        if journal.is_symlink():
+            raise MigrationError('Небезопасная ссылка вместо журнала миграции.')
         state = json.loads(journal.read_text(encoding='utf-8'))
         home, stage, backup = Path(state['home']), Path(state['stage']), Path(state['backup'])
         if state.get('schema') != 1 or home.parent.resolve() != stage.parent.resolve():
@@ -582,7 +604,6 @@ def recover_transaction(journal, *, stop_service, start_service):
             return 'prepared'
         if state['status'] not in ('stopping', 'switched', 'starting', 'health_check'):
             raise ValueError
-        stop_service()
         # A stage directory exists on both sides of the atomic exchange. The
         # durable state says whether the exchange was recorded, but a power loss
         # can land between exchange and journal write; inspect verified tree IDs.
@@ -600,9 +621,12 @@ def recover_transaction(journal, *, stop_service, start_service):
         if live_is_target:
             if _inventory(stage) != backup_inventory:
                 raise MigrationError('Старый каталог отличается от полной копии; автоматический откат остановлен.')
+            stop_service()
             exchange_directories(home, stage)
         elif _inventory(home) != backup_inventory:
             raise MigrationError('Рабочий каталог отличается от полной копии; автоматический откат остановлен.')
+        else:
+            stop_service()
         start_service()
         state['status'] = 'rolled_back'
         _write_journal(journal, state)
@@ -665,6 +689,16 @@ def migrate_transaction(home, old_source, target_source, *, old_revision, target
         state['status'] = 'stopping'
         _write_journal(journal, state)
         stop_service()
+        if _inventory(home) != _inventory(backup):
+            start_service()
+            state['status'] = 'rolled_back'
+            _write_journal(journal, state)
+            raise MigrationError('Данные изменились во время подготовки; ничего не переключено. Повтори миграцию.')
+        if not _matches_snapshot_excluding_stage_changes(backup, stage, plan['changes']):
+            start_service()
+            state['status'] = 'rolled_back'
+            _write_journal(journal, state)
+            raise MigrationError('Runtime изменился во время staging; ничего не переключено. Повтори миграцию.')
         exchange_directories(home, stage)
         state['status'] = 'switched'
         _write_journal(journal, state)

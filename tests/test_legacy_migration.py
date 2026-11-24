@@ -228,6 +228,32 @@ class LegacyMigrationPlannerTests(unittest.TestCase):
         self.assertEqual((self.home / 'bot.py').read_text(), self.old_files['bot.py'])
         self.assertEqual((self.home / '.codex/auth.json').read_text(), '{"session":"local"}')
 
+    def test_runtime_change_during_staging_aborts_before_switch(self):
+        self.target_files['requirements.txt'] = '# empty fixture\n'
+        self._source(self.new, self.target_files, '0.1.2-alpha.1', legacy=False)
+        (self.root / 'MIGRATION_SOURCE.json').write_text(json.dumps({
+            'schema': 1, 'version': '0.1.2-alpha.1', 'revision': 'b' * 40,
+            'verified_by': 'nook_update.fetch_release_source'}))
+        service = []
+
+        def stop_and_mutate():
+            service.append('stop')
+            (self.home / 'state.json').write_text('{"identity":"latest"}')
+
+        journal = self.root / 'migration.json'
+        with self.assertRaisesRegex(migration.MigrationError, 'Данные изменились'):
+            migration.migrate_transaction(
+                self.home, self.old, self.new,
+                old_revision=migration.LEGACY_COMMITS['0.1.0'], target_revision='b' * 40,
+                stage=self.root / 'home.stage', backup=self.root / 'home.backup',
+                journal=journal, stop_service=stop_and_mutate,
+                start_service=lambda: service.append('start'),
+                health_check=lambda *_: True, python=sys.executable)
+        self.assertEqual((self.home / 'bot.py').read_text(), self.old_files['bot.py'])
+        self.assertEqual((self.home / 'state.json').read_text(), '{"identity":"latest"}')
+        self.assertEqual(json.loads(journal.read_text())['status'], 'rolled_back')
+        self.assertEqual(service, ['stop', 'start'])
+
 
 if __name__ == '__main__':
     unittest.main()

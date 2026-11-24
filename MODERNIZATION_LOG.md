@@ -183,9 +183,9 @@ without weakening those checks.
   startup health checks and an independent recovery CLI.
 - Exact v0.1.0 and v0.1.1 Git archives were staged in disposable WSL copies;
   the plans touched 85 and 72 managed files respectively and retained a
-  private runtime fixture. All 173 unit tests and 3 API tests pass; runtime,
+  private runtime fixture. All 174 unit tests and 3 API tests pass; runtime,
   installer, bootstrap and manifest checks pass. Measured branch coverage is
-  52% overall, 19% in `bot.py`, and 57% in `legacy_migration.py`. Twelve focused
+  52% overall, 19% in `bot.py`, and 58% in `legacy_migration.py`. Thirteen focused
   tests cover no-space, failed health check, atomic switch and simulated loss.
 - Still open: deterministic Telegram bootstrap for v0.1.0, invocation through
   v0.1.1's existing self-updater, and the isolated systemd/dependency/network/
