@@ -170,9 +170,24 @@ rules. No attempt was made to rewrite them.
 
 ## Legacy migration check
 
-P0 migration remains open. Fetched exact tags `v0.1.0` (`4a4effa`) and
-`v0.1.1` (`5f4a9bf`); their original suites passed (22 and 81 tests) in
-isolated WSL copies. The first has no `self_update`, the second does. Neither
-version's full migration/rollback was tested. Current updater still refuses
-dependency changes and local conflicts. GitHub write credentials remain
-unavailable, so current local commits cannot yet reach PR #7.
+P0 migration remains open. The initial updater still refuses dependency
+changes and local conflicts; this iteration adds a separate transaction path
+without weakening those checks.
+
+## Iteration 6 — legacy migration groundwork (in progress)
+
+- Added `legacy_migration.py`: exact historical commit recognition, source
+  hash validation, conflict-safe source planning, signed-release fetch,
+  complete verified snapshots, side-by-side staging, a separate venv,
+  install-state initialization, atomic directory exchange, journal recovery,
+  startup health checks and an independent recovery CLI.
+- Exact v0.1.0 and v0.1.1 Git archives were staged in disposable WSL copies;
+  the plans touched 85 and 72 managed files respectively and retained a
+  private runtime fixture. All 173 unit tests and 3 API tests pass; runtime,
+  installer, bootstrap and manifest checks pass. Measured branch coverage is
+  52% overall, 19% in `bot.py`, and 57% in `legacy_migration.py`. Twelve focused
+  tests cover no-space, failed health check, atomic switch and simulated loss.
+- Still open: deterministic Telegram bootstrap for v0.1.0, invocation through
+  v0.1.1's existing self-updater, and the isolated systemd/dependency/network/
+  power-loss compatibility matrix. P0 is not complete and no live service was
+  changed. CI and PR status are reported after this iteration is pushed.

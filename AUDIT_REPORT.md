@@ -158,8 +158,9 @@ They describe repository states before the changes listed above.
 
 ### P0
 
-No P0 issue was established in this preliminary pass. That is not evidence
-that a complete security audit found none.
+No additional P0 issue was established during the preliminary audit. The
+historical-install migration remains separately tracked and unverified; this
+audit is not evidence that a complete security audit found no other issues.
 
 ### P1
 

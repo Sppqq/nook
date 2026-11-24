@@ -185,11 +185,13 @@
 - Iteration 5 local extensions and provider session/failover changes are
   implemented and locally verified; send the session stage to PR #7 and
   verify its Actions jobs before counting it complete.
-- P0 legacy migration remains open: the updater intentionally rejects
-  dependency changes and stops on local conflicts. The exact `v0.1.0` and
-  `v0.1.1` source tests pass in isolated copies (22/81 tests), but migration,
-  dependency replacement and rollback have not been exercised. `v0.1.0` has
-  no `self_update`, so it needs the requested one-time migrator.
+- P0 legacy migration remains open. A fail-closed migration planner now
+  recognizes the pinned `v0.1.0`/`v0.1.1` commits, validates historical and
+  signed target sources, stages an independent environment, snapshots the full
+  tree, atomically switches directories and journals health-check rollback.
+  Exact source planning/staging passed against both historical Git archives in
+  isolated WSL; 12 focused transaction tests pass. Telegram bootstrap and the
+  systemd cutover matrix are not yet complete, so compatibility is not certified.
 - Raise measured meaningful coverage from 41% overall / 19% `bot.py` toward
   50% / 30%; prioritize direct bot lifecycle and security boundary behavior.
 - Add bounded protocol version/capability negotiation and revocation tests
