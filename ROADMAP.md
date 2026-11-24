@@ -185,6 +185,11 @@
 - Iteration 5 local extensions and provider session/failover changes are
   implemented and locally verified; send the session stage to PR #7 and
   verify its Actions jobs before counting it complete.
+- P0 legacy migration remains open: the updater intentionally rejects
+  dependency changes and stops on local conflicts. The exact `v0.1.0` and
+  `v0.1.1` artifacts and their Telegram update paths have not been tested in
+  disposable installs; installations without `self_update` cannot receive a
+  Telegram-delivered bridge from their current bot.
 - Raise measured meaningful coverage from 41% overall / 19% `bot.py` toward
   50% / 30%; prioritize direct bot lifecycle and security boundary behavior.
 - Add bounded protocol version/capability negotiation and revocation tests

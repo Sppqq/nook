@@ -167,3 +167,13 @@ rules. No attempt was made to rewrite them.
 - No active instances, production data or credentials were changed. No Alpha
   tag/release or provenance claim was created. Long-duration/VPS and real
   provider-account testing remain unavailable.
+
+## Legacy migration check
+
+P0 migration is still open, not completed. The updater stops on changed
+dependency manifests and source conflicts. Exact historical release archives
+and old Telegram update behavior were not available for isolated end-to-end
+tests. Installations without `self_update` cannot receive new code via
+Telegram from their existing process. The prior verified changes are committed
+locally; current credential lookup returns no GitHub credential, so the new
+commit and this note remain local pending a normal push.

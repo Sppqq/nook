@@ -344,3 +344,10 @@ unavailable; compatibility mode remains for existing trusted modules and
 must be explicitly hardened by an owner policy. Full privileged service
 accounts remain a trust-boundary risk. The local Alpha archive is a build
 artifact only; no tag or release was published.
+
+P0 legacy migration is not certified. The updater intentionally refuses
+dependency changes and stops on local source conflicts. The exact published
+`v0.1.0`/`v0.1.1` artifacts were unavailable for disposable migration tests;
+installations without `self_update` cannot receive a Telegram-delivered
+bridge from their current bot. See `docs/UPDATES.md`; do not claim universal
+legacy or modified-install compatibility.
