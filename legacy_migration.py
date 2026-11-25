@@ -656,6 +656,21 @@ def _matches_snapshot_excluding_stage_changes(snapshot, stage, changed):
     return True
 
 
+def _restore_tree(home, stage, backup, inventory):
+    if stage.is_dir() and not stage.is_symlink() and _inventory(stage) == inventory:
+        return stage
+    restored = home.parent / ('.' + home.name + '.restore-' + uuid.uuid4().hex)
+    try:
+        shutil.copytree(backup, restored, symlinks=True, copy_function=shutil.copy2)
+        if _inventory(restored) != inventory:
+            raise MigrationError('Восстановленный каталог не совпал с полной копией.')
+        _sync_trees(home.parent)
+        return restored
+    except BaseException:
+        shutil.rmtree(restored, ignore_errors=True)
+        raise
+
+
 def recover_transaction(journal, *, stop_service, start_service):
     """Restore the pre-migration tree after interruption at any switch boundary."""
     journal = Path(journal)
@@ -693,10 +708,9 @@ def recover_transaction(journal, *, stop_service, start_service):
         if _inventory_digest(backup_inventory) != state['backup_sha256']:
             raise MigrationError('Полная резервная копия повреждена; каталоги оставлены без переключения.')
         if live_is_target:
-            if _inventory(stage) != backup_inventory:
-                raise MigrationError('Старый каталог отличается от полной копии; автоматический откат остановлен.')
+            old_tree = _restore_tree(home, stage, backup, backup_inventory)
             stop_service()
-            exchange_directories(home, stage)
+            exchange_directories(home, old_tree)
             nook_update.sync_directory(home.parent)
         elif _inventory(home) != backup_inventory:
             raise MigrationError('Рабочий каталог отличается от полной копии; автоматический откат остановлен.')

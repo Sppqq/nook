@@ -185,13 +185,12 @@
 - Iteration 5 local extensions and provider session/failover changes are
   implemented and locally verified; send the session stage to PR #7 and
   verify its Actions jobs before counting it complete.
-- P0 legacy migration remains open. A fail-closed migration planner now
-  recognizes the pinned `v0.1.0`/`v0.1.1` commits, validates historical and
-  signed target sources, stages an independent environment, snapshots the full
-  tree, atomically switches directories and journals health-check rollback.
-  Exact source planning/staging passed against both historical Git archives in
-  isolated WSL; 12 focused transaction tests pass. Telegram bootstrap and the
-  systemd cutover matrix are not yet complete, so compatibility is not certified.
+- The legacy SSH bootstrap handles exact `v0.1.0` and `v0.1.1`
+  installations with an attested target release. Linux CI checks both trees
+  with a disposable user systemd service and a local candidate artifact.
+  Published-artifact and live Telegram/provider tests still require a release
+  and a disposable bot. The historical Telegram install paths need a bridge
+  deployed outside these immutable tags.
 - Raise measured meaningful coverage from 41% overall / 19% `bot.py` toward
   50% / 30%; prioritize direct bot lifecycle and security boundary behavior.
 - Add bounded protocol version/capability negotiation and revocation tests

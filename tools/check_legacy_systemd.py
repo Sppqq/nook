@@ -1,13 +1,16 @@
 """Exercise both historical source trees against a disposable user systemd unit."""
 import argparse
 import json
+import os
 from hashlib import sha256
 from pathlib import Path
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import legacy_migration as migration
 import nook_update
@@ -105,7 +108,41 @@ def check(base, version, mode, artifact):
             health_check=lambda root, _version: migration._wait_healthy(
                 root, unit, release['revision'], timeout=12, stable=2),
         )
-        if mode == 'rollback':
+        if mode == 'offline':
+            with (patch.dict(os.environ, {'PIP_NO_INDEX': '1'}),
+                  unittest.TestCase().assertRaisesRegex(migration.MigrationError, 'отдельную среду')):
+                transaction()
+            assert not journal.exists()
+            assert not backup.exists()
+            assert not (home / 'memory/last-write').exists()
+            assert migration._user_service(home) == unit
+            print(f'v{version}: dependency fetch failure left {unit} running', flush=True)
+            return
+        if mode == 'interrupt':
+            exchange = migration.exchange_directories
+
+            def exchange_then_exit(left, right):
+                exchange(left, right)
+                os.kill(os.getpid(), signal.SIGKILL)
+
+            pid = os.fork()
+            if pid == 0:
+                with patch.object(migration, 'exchange_directories', exchange_then_exit):
+                    transaction()
+                os._exit(1)
+            _, status = os.waitpid(pid, 0)
+            assert os.waitstatus_to_exitcode(status) == -signal.SIGKILL
+            assert json.loads(journal.read_text())['status'] == 'ready'
+            assert json.loads((home / 'MANIFEST.json').read_text())['version'] == release['version']
+            # Remove access to the old stage without touching its files. This
+            # forces the independent recovery path to use the full backup.
+            (base / 'stage').rename(base / 'original-stage')
+            assert migration.recover_transaction(
+                journal, stop_service=lambda: migration._service_action(unit, 'stop'),
+                start_service=lambda: migration._service_action(unit, 'start'),
+            ) == 'rolled_back'
+            expected = version
+        elif mode == 'rollback':
             with unittest.TestCase().assertRaisesRegex(migration.MigrationError, 'откат'):
                 transaction()
             assert json.loads(journal.read_text())['status'] == 'rolled_back'
@@ -137,7 +174,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('artifact', type=Path)
     args = parser.parse_args()
-    for version, mode in (('0.1.0', 'upgrade'), ('0.1.1', 'upgrade'), ('0.1.1', 'rollback')):
+    for version, mode in (('0.1.0', 'upgrade'), ('0.1.1', 'upgrade'), ('0.1.1', 'rollback'),
+                          ('0.1.1', 'offline'), ('0.1.1', 'interrupt')):
         with tempfile.TemporaryDirectory(prefix='nook-systemd-') as base:
             check(Path(base), version, mode, args.artifact.resolve())
 
