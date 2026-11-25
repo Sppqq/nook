@@ -2,10 +2,12 @@
 import asyncio
 import base64
 from dataclasses import dataclass
+import grp
 import hashlib
 import json
 import os
 from pathlib import Path
+import pwd
 import re
 import stat
 import time
@@ -117,10 +119,21 @@ def quota_for(result, workspace, model):
     return Quota(tuple(windows), blocked)
 
 
-def owned_path(path, *, directory=False, private=False):
+def owned_path(path, *, directory=False, private=False, allow_user_group=False):
     info = path.lstat()
     expected = stat.S_ISDIR if directory else stat.S_ISREG
     forbidden = 0o077 if private else 0o022
+    if directory and allow_user_group and not private and info.st_mode & 0o020:
+        try:
+            user = pwd.getpwuid(os.getuid())
+            group = grp.getgrgid(info.st_gid)
+            if (group.gr_gid == user.pw_gid == user.pw_uid and group.gr_name == user.pw_name
+                    and set(group.gr_mem) <= {user.pw_name}
+                    and all(entry.pw_uid == user.pw_uid for entry in pwd.getpwall()
+                            if entry.pw_gid == group.gr_gid)):
+                forbidden = 0o002
+        except KeyError:
+            pass
     if (not expected(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & forbidden
             or (not directory and info.st_nlink != 1)):
         raise OSError("Unsafe Codex pool path")
@@ -152,6 +165,7 @@ class Pool:
     def environment(self, account, base):
         env = {key: value for key, value in base.items()
                if key not in ("CODEX_HOME", "CODEX_SQLITE_HOME", "OPENAI_API_KEY", "CODEX_API_KEY")}
+        owned_path(self.root, directory=True, allow_user_group=True)
         if not account.active:
             owned_path(account.auth.parent, directory=True)
         owned_path(account.auth, private=True)

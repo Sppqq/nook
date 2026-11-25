@@ -33,7 +33,7 @@ os.umask(0o077)
 
 import guard
 import antigravity_limits
-from codex_pool import Pool as CodexPool, QUOTA_ERROR as POOL_QUOTA_ERROR, REFRESH as POOL_REFRESH
+from codex_pool import Pool as CodexPool, QUOTA_ERROR as POOL_QUOTA_ERROR, REFRESH as POOL_REFRESH, owned_path
 import mods as modsys
 import job_scheduler
 from agent_process import read_tail, stop_process_group
@@ -2994,7 +2994,7 @@ async def cmd_login(msg: Message):
 CODEX_LOGIN_LOCK = asyncio.Lock()
 
 
-async def do_login(chat):
+async def do_login(chat, *, after_login=None):
     if core.codex_pool_runtime.busy:
         return await send(chat, ui_text("Дождись завершения работы пула Codex и повтори вход.",
                                         "Wait for the Codex pool to finish, then try signing in again."))
@@ -3003,8 +3003,13 @@ async def do_login(chat):
                                             "Codex sign-in is already in progress. Use the previous link to finish."))
     async with CODEX_LOGIN_LOCK:
         # Вход в отдельном каталоге: неудача или отмена не трогает текущий аккаунт.
-        auth_home = os.path.expanduser("~/.codex")
-        os.makedirs(auth_home, mode=0o700, exist_ok=True)
+        auth_home = Path(os.path.expanduser("~/.codex"))
+        try:
+            auth_home.mkdir(mode=0o700, exist_ok=True)
+            owned_path(auth_home, directory=True, allow_user_group=True)
+        except OSError:
+            return await send(chat, ui_text("Каталог авторизации Codex небезопасен или недоступен.",
+                                            "The Codex credential directory is unsafe or inaccessible."))
         with tempfile.TemporaryDirectory(prefix=".nook-login-", dir=auth_home) as stage:
             env = codex_env()
             env["CODEX_HOME"] = stage
@@ -3034,29 +3039,38 @@ async def do_login(chat):
                     await proc.wait()
                 if sent:
                     trash(chat, sent, 5)
-            new_auth = os.path.join(stage, "auth.json")
-            if proc.returncode != 0 or not os.path.isfile(new_auth):
+            new_auth = Path(stage) / "auth.json"
+            if proc.returncode != 0 or not new_auth.exists():
                 return await send(chat, ui_text("Не удалось войти в новый аккаунт Codex. Текущий вход сохранён.",
                                             "Could not sign in to the new Codex account. Your current login is still active."))
             try:
+                owned_path(new_auth)
                 auth = load_json(new_auth, {})
-                if not (auth.get("tokens") or auth.get("OPENAI_API_KEY")):
+                if not isinstance(auth, dict) or not (auth.get("tokens") or auth.get("OPENAI_API_KEY")):
                     raise ValueError("empty credentials")
-                target = os.path.join(auth_home, "auth.json")
-                if os.path.exists(target):
-                    backup = target + ".bak-" + dt.datetime.now().strftime("%Y%m%d-%H%M%S")
-                    shutil.copy2(target, backup)
-                    os.chmod(backup, 0o600)
-                os.chmod(new_auth, 0o600)
+                target = auth_home / "auth.json"
+                try:
+                    owned_path(target)
+                except FileNotFoundError:
+                    pass
+                else:
+                    backup = target.with_name(f"auth.json.bak-{time.time_ns()}")
+                    with os.fdopen(os.open(backup, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as previous:
+                        previous.write(target.read_bytes())
+                new_auth.chmod(0o600)
                 os.replace(new_auth, target)
             except (OSError, ValueError):
                 return await send(chat, ui_text("Не удалось сохранить новый вход Codex. Предыдущий аккаунт сохранён.",
                                             "Could not save the new Codex login. Your previous login is still active."))
-            STATE["main_thread"] = None
+            if not str(STATE.get("main_thread") or "").startswith(("merc-", "agy-")):
+                STATE["main_thread"] = None
             STATE["fallback_until"] = 0
+            LIMITS_CACHE.update(data=None, at=0.0)
             save_state()
+            if after_login is not None:
+                await after_login(target)
             await send_tmp(chat, ui_text("✅ Аккаунт Codex подключён. Следующий разговор начнётся заново. Лимиты можно посмотреть кнопкой «Лимиты».",
-                                            "✅ Codex account connected. The next conversation starts a new session. Open Usage to check your quotas."), 120)
+                                            "✅ Codex account connected. The next Codex conversation starts a new session. Open Usage to check your quotas."), 120)
 
 
 # ---------------------------------------------------------------- голосовые

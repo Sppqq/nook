@@ -53,6 +53,11 @@ resume call uses the original thread after finding an eligible account.
 - Same-account quota sampling and turn execution are mutually exclusive
   inside Nook. Manual credential changes wait for pool I/O. External Codex
   commands run outside that coordination.
+- Device sign-in imports credentials into the account registry only after
+  installing a validated login, under the same lock. It preserves other
+  providers' conversations. A failed or cancelled manual switch restores
+  the previous login and registry. Cancellation terminates the CLI's process
+  group before restoring files so a wrapper child cannot overwrite them.
 - Fixtures reject unsafe registry permissions and hard-linked auth files.
   A resumed turn cannot replace the requested thread with an unexpected
   ID. Partial responses, malformed output and completed turns suppress

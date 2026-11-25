@@ -4,7 +4,8 @@
 
 - Pool credential and retry guards cover concurrent quota probes, manual
   account changes, malformed streams, partial replies, and mismatched
-  session IDs. Verify token refresh and fallback with disposable live
+  session IDs. Manual switch cancellation restores the prior login and
+  registry. Verify token refresh and fallback with disposable live
   accounts before promotion.
 
 - The owner can switch the main Telegram menu, interface settings, release

@@ -6,7 +6,11 @@ import json
 import os
 from pathlib import Path
 import shutil
+import signal
 import time
+
+from codex_pool import owned_path
+from nook_update import atomic
 
 
 def account_id(account):
@@ -15,12 +19,15 @@ def account_id(account):
 
 async def cli(*args, json_output=True):
     proc = await asyncio.create_subprocess_exec(
-        shutil.which('codex-auth') or str(Path.home()/'.npm-global/bin/codex-auth'), *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        shutil.which('codex-auth') or str(Path.home()/'.npm-global/bin/codex-auth'), *args,
+        start_new_session=True, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
     try:
         out, _ = await asyncio.wait_for(proc.communicate(), 30)
     except BaseException:
-        if proc.returncode is None:
-            proc.kill()
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
         await proc.communicate()
         raise
     if proc.returncode:
@@ -115,8 +122,8 @@ def setup(m):
         if busy():
             return await ctx.toast(t('Сначала дождись завершения текущей задачи, затем выбери аккаунт снова.', 'Wait for the current task to finish, then choose the account again.'))
         async with lock, login_lock:
-            backup = None
             target = Path.home()/'.codex/auth.json'
+            registry = target.parent / 'accounts/registry.json'
             try:
                 stored = await accounts()
                 chosen = next((a for a in stored if account_id(a) == ctx.arg), None)
@@ -125,15 +132,31 @@ def setup(m):
                 if chosen.get('active'):
                     await show(ctx, edit=True)
                     return await ctx.toast(t('Этот аккаунт Codex уже выбран.', 'This Codex account is already active.'))
-                if target.exists():
-                    backup = target.with_name('auth.json.bak-switch-' + str(time.time_ns()))
-                    shutil.copy2(target, backup)
-                    backup.chmod(0o600)
-                await cli('switch', str(chosen['number']), '--json')
-                current = await accounts()
-                if not any(a.get('active') and account_id(a) == ctx.arg for a in current):
-                    raise RuntimeError('account switch not confirmed')
-                target.chmod(0o600)
+                previous = {}
+                for path in (target, registry):
+                    try:
+                        owned_path(path.parent, directory=True, allow_user_group=path == target)
+                        owned_path(path)
+                    except FileNotFoundError:
+                        previous[path] = None
+                    else:
+                        previous[path] = path.read_bytes()
+                if previous[target] is not None:
+                    atomic(target.with_name('auth.json.bak-switch-' + str(time.time_ns())), previous[target])
+                try:
+                    await cli('switch', str(chosen['number']), '--json')
+                    current = await accounts()
+                    if not any(a.get('active') and account_id(a) == ctx.arg for a in current):
+                        raise RuntimeError('account switch not confirmed')
+                    owned_path(target)
+                    target.chmod(0o600)
+                except (OSError, RuntimeError, ValueError, asyncio.TimeoutError, asyncio.CancelledError):
+                    for path, data in previous.items():
+                        if data is None:
+                            path.unlink(missing_ok=True)
+                        else:
+                            atomic(path, data)
+                    raise
                 thread = str(m.core.state.get('main_thread') or '')
                 if not thread.startswith(('merc-', 'agy-')):
                     m.core.state['main_thread'] = None
@@ -141,12 +164,7 @@ def setup(m):
                 core['LIMITS_CACHE'].update(data=None, at=0.0)
                 core['save_state']()
             except (OSError, RuntimeError, ValueError, asyncio.TimeoutError):
-                if backup is not None:
-                    temp = target.with_name('.auth-restore-' + str(time.time_ns()))
-                    shutil.copy2(backup, temp)
-                    temp.chmod(0o600)
-                    os.replace(temp, target)
-                return await ctx.toast(t('Не удалось переключить Codex. Предыдущий вход сохранён.', 'Could not switch Codex accounts. The previous login was restored.'))
+                return await ctx.toast(t('Не удалось подтвердить смену Codex. Проверь текущий аккаунт.', 'Could not confirm the Codex account switch. Check the active account.'))
         await show(ctx, edit=True)
         await ctx.toast(t('Аккаунт Codex переключён', 'Codex account switched'))
 
@@ -162,21 +180,15 @@ def setup(m):
             return await ctx.toast(t('Вход или смена аккаунта уже выполняется.', 'A sign-in or account switch is already in progress.'))
         if busy():
             return await ctx.toast(t('Дождись завершения текущей задачи, затем открой вход снова.', 'Wait for the current task to finish, then try signing in again.'))
+        async def import_login(path):
+            await cli('import', str(path), json_output=False)
+
         async def run():
             async with lock:
-                thread = str(m.core.state.get('main_thread') or '')
                 try:
-                    # Save the current account before the core device flow replaces it.
-                    await accounts()
-                    await m.core.codex_login(ctx.chat)
-                    await cli('import', str(Path.home()/'.codex/auth.json'), json_output=False)
-                    core['LIMITS_CACHE'].update(data=None, at=0.0)
+                    await m.core.codex_login(ctx.chat, after_login=import_login)
                 except (OSError, RuntimeError, ValueError, asyncio.TimeoutError):
                     await m.send(t('Не удалось обновить список аккаунтов Codex. Открой его ещё раз.', 'Could not refresh Codex accounts. Reopen the list and try again.'))
-                finally:
-                    if thread.startswith(('merc-', 'agy-')):
-                        m.core.state['main_thread'] = thread
-                        core['save_state']()
             await show(ctx, edit=True)
         await ctx.toast(t('Открываю вход в новый аккаунт', 'Starting sign-in'))
         task = asyncio.create_task(run())

@@ -136,13 +136,20 @@ sys.exit(0 if pathlib.Path(__file__).with_suffix('.approve').exists() else 1)
         runtime['send'] = AsyncMock()
         runtime['send_tmp'] = AsyncMock()
         runtime['STATE'].update(main_thread='old-thread', fallback_until=100, ui_language='en')
+        imported = []
+
+        async def after_login(path):
+            self.assertTrue(runtime['CODEX_LOGIN_LOCK'].locked())
+            imported.append(json.loads(path.read_text())['tokens']['access_token'])
+
         with patch.object(runtime['os'].path, 'expanduser', return_value=str(auth_home)):
-            await runtime['do_login'](7)
+            await runtime['do_login'](7, after_login=after_login)
             self.assertEqual(auth.read_text(), previous)
             self.assertEqual(runtime['STATE']['main_thread'], 'old-thread')
             self.assertIn('Could not sign in', runtime['send'].await_args.args[1])
+            self.assertEqual(imported, [])
             cli.with_suffix('.approve').touch()
-            await runtime['do_login'](7)
+            await runtime['do_login'](7, after_login=after_login)
 
         self.assertEqual(json.loads(auth.read_text())['tokens']['access_token'], 'new-fixture')
         self.assertEqual(auth.stat().st_mode & 0o777, 0o600)
@@ -152,6 +159,11 @@ sys.exit(0 if pathlib.Path(__file__).with_suffix('.approve').exists() else 1)
         self.assertIsNone(runtime['STATE']['main_thread'])
         self.assertEqual(runtime['STATE']['fallback_until'], 0)
         self.assertIn('Codex account connected', runtime['send_tmp'].await_args.args[1])
+        self.assertEqual(imported, ['new-fixture'])
+        runtime['STATE']['main_thread'] = 'agy-existing'
+        with patch.object(runtime['os'].path, 'expanduser', return_value=str(auth_home)):
+            await runtime['do_login'](7)
+        self.assertEqual(runtime['STATE']['main_thread'], 'agy-existing')
 
     async def test_owner_pool_strategy_and_cli_resume_after_quota(self):
         from test_codex_pool import fake_accounts

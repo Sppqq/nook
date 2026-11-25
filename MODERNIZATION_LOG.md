@@ -1,5 +1,15 @@
 # Modernization log
 
+## Iteration 19 — make manual account changes recoverable
+
+- Account imports run under the core login lock after successful device
+  authorization. A failed sign-in keeps the previous account and quota
+  cache. Other providers keep their current conversation.
+- A failed or cancelled account switch restores the previous credential and
+  registry contents. The CLI wrapper and its subprocesses stop before the
+  restoration. Legacy Codex homes with a local user-private group remain
+  usable with their existing directory mode.
+
 ## Iteration 18 — exercise the oldest installation and the owner handoff
 
 - Run the original v0.1.0 bot and its declared dependencies before the

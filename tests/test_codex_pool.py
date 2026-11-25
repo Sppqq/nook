@@ -8,9 +8,9 @@ import tempfile
 import time
 from types import SimpleNamespace
 import unittest
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
-from codex_pool import Pool, quota_for, saved_accounts
+from codex_pool import Pool, owned_path, quota_for, saved_accounts
 
 
 def fake_accounts(root):
@@ -45,6 +45,19 @@ class PoolTests(unittest.IsolatedAsyncioTestCase):
         self.pool = Pool(self.root, self.settings, self.quota_read, asyncio.Lock())
         self.primary, self.reserve = self.pool.accounts()
         self.run = SimpleNamespace(cancelled=False, effects_possible=False)
+
+    def test_legacy_group_writable_home_requires_a_user_private_group(self):
+        self.root.chmod(0o775)
+        uid = os.getuid()
+        user = SimpleNamespace(pw_name="nook", pw_uid=uid, pw_gid=uid)
+        group = SimpleNamespace(gr_name="nook", gr_gid=uid, gr_mem=[])
+        with patch("codex_pool.pwd.getpwuid", return_value=user), \
+                patch("codex_pool.grp.getgrgid", return_value=group), \
+                patch("codex_pool.pwd.getpwall", return_value=[user]) as members:
+            owned_path(self.root, directory=True, allow_user_group=True)
+            members.return_value.append(SimpleNamespace(pw_uid=uid + 1, pw_gid=uid))
+            with self.assertRaises(OSError):
+                owned_path(self.root, directory=True, allow_user_group=True)
 
     async def quota_read(self, env):
         who = (Path(env["CODEX_HOME"]) / "auth.json").read_text()
