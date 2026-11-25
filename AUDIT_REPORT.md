@@ -1,5 +1,15 @@
 # Nook technical audit
 
+## Independent review scope
+
+Review the signed release path, the legacy updater's restore points, the
+isolated extension broker and policy ownership, and pooled credential and
+session handling. Reproduce the upgrade and rollback with disposable
+accounts and include a long run on a separate VPS. The results below are
+maintainer checks. The 189-test local coverage run (one optional `age`
+test skipped) covered 24% of lines in `bot.py`, 86% in `codex_pool.py`,
+and 61% in `legacy_migration.py`. The 90% core target remains open.
+
 ## Current Codex pool audit
 
 - Pool recovery distinguishes an unavailable quota sample from a confirmed
@@ -13,7 +23,9 @@
   replace the primary auth file. External provider backups explicitly include
   the saved logins and exclude generated links.
 - The fixture exercises actual Nook dispatch and Codex CLI protocol via local
-  subprocesses. A live multi-account soak and independent audit remain open.
+  subprocesses. The Codex CLI 0.171.0-generated protocol schema confirms
+  the quota fields and treats null eligibility as unavailable. A live
+  multi-account soak and independent audit remain open.
 
 ## Current update audit
 

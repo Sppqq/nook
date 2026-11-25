@@ -2,6 +2,10 @@
 
 ## Current work
 
+- Current local line coverage is 24% for `bot.py`, 86% for the pool and
+  61% for legacy migration. Focus on the queue, Telegram entry points,
+  and recovery branches to close the core coverage gap.
+
 - The pool checks unknown quota again before distant account resets and
   resumes as soon as an eligible account is confirmed.
 
@@ -47,9 +51,8 @@
   Promotion verifies published predecessors before comparing application trees.
 - Fresh installers resolve the channel or exact published version before
   downloading. The development checkout has its own explicit mode.
-- Remaining owner setup: protect `main` and version tags, configure the
-  release environments and approve a new Actions run. Existing CI runs for
-  PR #7 reported `action_required`.
+- Confirm protection for `main` and version tags and review the release
+  environments before promotion. PR #9 exercises Actions on push and PR.
 - Backups use SQLite snapshots, reject changed non-SQLite files, and support
   offline capture, age encryption, retention and explicit provider opt-in.
 - The updater now binds staged plans to settings, supports explicit downgrade,

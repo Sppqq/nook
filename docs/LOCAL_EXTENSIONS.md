@@ -59,6 +59,23 @@ trusted files before enabling that mode. An empty `legacy` object denies
 legacy imports. Leaving the key absent preserves installed behavior. A
 policy change takes effect for legacy modules at the next reload.
 
+## Moving an existing trusted mod gradually
+
+Keep the working `mods/NAME.py` active while you extract a function with
+explicit JSON inputs and outputs. Pass only the fields it needs. Keep
+Telegram handlers, scheduled dispatch, and permissions in the trusted wrapper.
+Stage and test the isolated function using fixtures for the input shapes and
+failure cases the legacy mod handles. Compare its output to the old function
+using copies of data and read-only cases. Avoid invoking both implementations
+on a live task that can change state.
+
+After the owner approves the isolated version, have the trusted wrapper call
+the active extension through `bin/nook-dev run`. Keep the old wrapper and its
+data available until the owner accepts the switch. If the isolated function
+cannot do a required job without host access, keep that part in the trusted
+wrapper. A return to the previous wrapper or extension version affects future
+requests. Reconcile any in-flight side effects before retrying.
+
 ## Runtime boundary
 
 The Linux runner uses Bubblewrap namespaces, a read-only system Python

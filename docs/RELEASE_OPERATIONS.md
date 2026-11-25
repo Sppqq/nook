@@ -1,32 +1,17 @@
 # Выпуски Nook · инструкция владельцу
 
-## PR №7 и Actions
+## Текущая серия
 
-Проверено 24 ноября 2026 года. PR №7 открыт в `Sppqq/nook` из
-`feature/road-to-10` в `dev`. GitHub показывает `action_required` и ноль
-заданий для запуска PR 45432925443 и запуска push 45432882400. Оба запуска
-созданы аккаунтом владельца. Публичный API не раскрывает причину блокировки.
+Изменения PR №7 и №8 вошли в `main`. Следующие исправления проходят CI
+в PR №9. Перед выпуском проверь задания Python 3.11 и 3.12 для commit,
+который войдёт в артефакт.
 
-1. Войди в GitHub владельцем и открой каждый запуск. Действуй по баннеру
-   GitHub. Если это `Approve workflows to run`, проверь commit и нажми
-   кнопку в PR. Если GitHub показывает ограничение Actions или биллинга,
-   устрани названное ограничение в Settings → Actions → General или в
-   Billing and licensing. Сохрани текст баннера для повторной диагностики,
-   если запуск по-прежнему не создаёт ни одного задания.
-2. Восстанови авторизацию `gh auth login --hostname github.com --web` и
-   проверь `gh auth status`. Для токена с ограниченным доступом дай запись
-   `Contents` и `Workflows` только для этого репозитория. Выполни
-   `git push origin HEAD:feature/road-to-10` из сохранённой ветки Nook.
-   Существующий PR обновится автоматически. При non-fast-forward
-   проверь расхождение веток перед повторной попыткой.
-3. Проверь Checks у новой вершины PR. Если доступен Re-run all jobs, можно
-   также повторить исходный запуск. Нужен фактический запуск заданий,
-   включая Python 3.11 и 3.12.
+Опубликованный `v0.1.2-alpha.1` относится к commit `beef3a4`.
+Клиент Nook скачал ZIP и успешно проверил SHA-256 и Sigstore-аттестацию.
+Проверка на отдельном VPS и последующие ступени ещё предстоят.
 
-Ссылки: [PR №7](https://github.com/Sppqq/nook/pull/7),
-[запуск PR](https://github.com/Sppqq/nook/actions/runs/45432925443),
-[запуск push](https://github.com/Sppqq/nook/actions/runs/45432882400),
-[настройки Actions](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/enabling-features-for-your-repository/managing-github-actions-settings-for-a-repository).
+[PR №9](https://github.com/Sppqq/nook/pull/9) ·
+[Alpha](https://github.com/Sppqq/nook/releases/tag/v0.1.2-alpha.1)
 
 ## Rulesets и релизные окружения
 
@@ -48,8 +33,8 @@
 
 После слияния в `main` запусти **Verified release** с Publish off.
 Проверь артефакты подготовки и SHA-256. После разрешения выпуска создай
-тег `v0.1.2-alpha.1` на проверенном commit и запусти тот же workflow
-с тегом и Publish on. На чистом Ubuntu или Debian проверь установку с
+тег для следующего согласованного номера на проверенном commit и
+запусти тот же workflow с этим тегом и Publish on. На чистом Ubuntu или Debian проверь установку с
 `--channel alpha --version 0.1.2-alpha.1`, переключение канала в
 Telegram на отдельном тестовом боте и отказ при подмене ZIP или bundle.
 Для проверки происхождения `gh` должен поддерживать `attestation verify`

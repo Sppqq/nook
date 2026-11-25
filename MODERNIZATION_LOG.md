@@ -1,5 +1,14 @@
 # Modernization log
 
+## Iteration 10 — Alpha onboarding and contribution guides
+
+- Updated both READMEs and release operations to use the published Alpha.
+- Added issue and PR templates with concrete verification and compatibility
+  fields. Documented staged migration of a trusted mod's pure logic while
+  retaining its existing data, permissions, and rollback path.
+- Checked the CLI-generated quota protocol schema against the pool reader
+  without reading credentials or making provider calls.
+
 ## Iteration 9 — pool recovery and migration interlock
 
 - Corrected Codex pool retry timing and error classification with aiogram
