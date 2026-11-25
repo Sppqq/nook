@@ -65,9 +65,11 @@ quota details and the existing account budget callbacks.
   bot to report health while the historical supervisor is active. If the
   supervisor was interrupted, the guard restores the old source under both
   locks. The compatibility code executes only the digest-matched bytes.
-- Verified the original worker in a disposable Linux user systemd service
-  with simulated Telegram transport. The test covers code adoption with
-  the same dependencies, preservation of local data and the main channel,
+- The disposable Linux user systemd fixture executes the original menu's
+  check and approval handlers, the pinned-revision archive check and the
+  original worker. It runs the updated bot in the fixture installation's
+  venv with v0.1.1's declared dependencies. Telegram transport and GitHub
+  downloads are simulated. It covers local data, channel preservation,
   and rollback of an interrupted transaction.
 
 ## Earlier findings

@@ -16,9 +16,10 @@
 - PR #9 continues the work integrated into main by #7 and #8.
 - The original v0.1.1 Telegram updater can adopt the candidate through
   its existing code-only main update. A disposable user-systemd test
-  exercises the original worker, startup health, channel preservation and
-  recovery after interruption. The original v0.1.0 needs the signed-release
-  bootstrap because it has no update button.
+  exercises the original menu and worker with the v0.1.1 dependency set,
+  startup health, channel preservation and recovery after interruption.
+  The original v0.1.0 needs the signed-release bootstrap because it has no
+  update button.
 - Managed installations can adopt a signed compatible release with a new
   dependency set through Telegram. The updater verifies an offline snapshot,
   waits for candidate health, and restores the old code and environment on

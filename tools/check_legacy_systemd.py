@@ -1,5 +1,6 @@
 """Exercise historical and dependency-changing updates in disposable user systemd services."""
 import argparse
+import asyncio
 from importlib.util import module_from_spec, spec_from_file_location
 import json
 import os
@@ -10,10 +11,12 @@ import signal
 import sqlite3
 import subprocess
 import sys
+import tarfile
 import tempfile
 import time
+from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import legacy_migration as migration
 import nook_update
@@ -201,10 +204,42 @@ def check_legacy_button(home, source, target, release, service):
     systemctl = lambda *args, **kwargs: service_systemctl(
         *(service if arg == 'nook.service' else arg for arg in args), **kwargs)
     health = old.healthy
-    stage = old.workspace(home) / 'staged' / '0123456789abcdef'
-    old.plan_source(home, target, revision, stage)
+    archive = target.parent / 'candidate-main.tar.gz'
+    with tarfile.open(archive, 'w:gz') as tar:
+        tar.add(target, arcname=f'nook-{revision}')
+
+    def download(url, path, _limit):
+        if url == f'https://api.github.com/repos/{old.REPO}/commits/main':
+            path.write_text(json.dumps({'sha': revision}))
+        else:
+            assert url == f'https://codeload.github.com/{old.REPO}/tar.gz/{revision}'
+            shutil.copyfile(archive, path)
+
+    old_mod_spec = spec_from_file_location('nook_v011_update_menu', home / 'mods/self_update.py')
+    old_mod = module_from_spec(old_mod_spec)
+    with patch.dict(sys.modules, {'nook_update': old}):
+        old_mod_spec.loader.exec_module(old_mod)
+    from mods import Mod
+
+    mod = Mod('self_update', SimpleNamespace(
+        btn=lambda _label, data, _icon, _style: data,
+    ))
+    old_mod.setup(mod)
+    ctx = SimpleNamespace(toast=AsyncMock(), reply=AsyncMock(), edit=AsyncMock())
+    with patch.object(old, 'download', download):
+        asyncio.run(mod.callbacks['check'](ctx))
+    text, rows = ctx.reply.await_args.args
+    assert revision[:10] in text
+    assert rows[0][0].startswith('mod:self_update:apply:')
+    ctx.arg = rows[0][0].split(':')[-1]
+    stage = old.workspace(home) / 'staged' / ctx.arg
+    with patch.object(old, 'systemctl', systemctl):
+        fixture_pid = old.service_matches(home)
+        with patch.object(old_mod, 'service_matches', lambda root, _pid: old.service_matches(root, fixture_pid)):
+            asyncio.run(mod.callbacks['apply'](ctx))
+    ctx.edit.assert_awaited_once()
+    assert old.read_json(old.workspace(home) / 'request.json')['id'] == stage.name
     old.atomic(stage / 'worker.py', (source / 'nook_update.py').read_bytes())
-    assert old.request(home, stage.name)
     with (patch.object(old, 'systemctl', systemctl),
           patch.object(old, 'healthy', lambda *args: health(*args, timeout=SUCCESSFUL_START_TIMEOUT, stable=2)),
           patch.object(old, 'notify') as notify):
@@ -238,10 +273,11 @@ def check(base, version, mode, artifact):
     commit = migration.LEGACY_COMMITS[version]
     home, source = stage_legacy(base, version, commit)
     runtime = seed_runtime(home)
-    if mode == 'upgrade':
+    if mode in ('upgrade', 'button'):
         python = str(home / '.venv/bin/python')
         run(python, '-m', 'ensurepip')
-        run(python, '-m', 'pip', 'install', '--disable-pip-version-check', 'colorama==0.4.6', timeout=120)
+        packages = ['-r', str(home / 'requirements.txt')] if mode == 'button' else ['colorama==0.4.6']
+        run(python, '-m', 'pip', 'install', '--disable-pip-version-check', *packages, timeout=180)
     target = base / 'release'
     target.mkdir()
     nook_update.unpack_zip(artifact, target)
@@ -257,7 +293,7 @@ def check(base, version, mode, artifact):
     config = Path.home() / '.config/systemd/user'
     config.mkdir(parents=True, exist_ok=True)
     unit_file = config / unit
-    python = sys.executable if mode == 'button' else home / '.venv/bin/python'
+    python = home / '.venv/bin/python'
     unit_contents = (f'[Service]\nWorkingDirectory={home}\n'
                      f'ExecStart="{python}" "{service}" {mode}\n')
     unit_file.write_text(unit_contents)

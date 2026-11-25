@@ -1,5 +1,12 @@
 # Modernization log
 
+## Iteration 15 — verify the exact v0.1.1 update path
+
+- Exercise the historical menu check and confirmation, pinned main archive,
+  and worker on Linux user systemd. Reuse the v0.1.1 installation's own
+  environment across cutover. The fixture installs its declared base
+  dependencies and simulates only the remote download and Telegram traffic.
+
 ## Iteration 14 — localize the Telegram update path
 
 - Add an owner-only language switch that preserves existing preferences and
