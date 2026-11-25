@@ -20,7 +20,33 @@ import urllib.request
 import urllib.error
 from zoneinfo import ZoneInfo
 
+from release_channels import CHANNELS, CHANNEL_LABELS, channel_for_version
+from installer_source import choose_channel, install_from_source
+
 SOURCE = Path(__file__).resolve().parent
+RUNTIME_DIRS = {'memory', 'keys', 'spool', 'inbox', 'logs', 'tmp', '.venv'}
+RUNTIME_FILES = {
+    'config.json', 'secrets.env', '.env', 'state.json', 'nodes.json', 'ssh_config',
+    '.nook-install.json', '.nook-runtime.lock',
+}
+
+def runtime_path(rel):
+    parts = PurePosixPath(rel).parts
+    return bool(parts) and (
+        parts[0] in RUNTIME_DIRS
+        or (len(parts) == 1 and parts[0] in RUNTIME_FILES)
+        or (parts[0] == '.codex' and len(parts) > 1
+            and parts[1] in {'auth.json', 'sessions'})
+    )
+
+def ignore_source_data(directory, names):
+    base = Path(directory).relative_to(SOURCE)
+    return {
+        name for name in names
+        if name in {'.git', 'dist', '__pycache__'}
+        or '.bak' in name or name.endswith('.pyc')
+        or runtime_path((base / name).as_posix())
+    }
 
 def paint(text, color='36'):
     return '\033[' + color + 'm' + text + '\033[0m' if sys.stdout.isatty() and 'NO_COLOR' not in os.environ else text
@@ -80,6 +106,15 @@ def choose_options(args):
                 break
             print('  Введи число от 1 до 3.')
 
+def choose_update_settings(args, source_version):
+    if getattr(args, 'dev', False) and args.channel is None:
+        args.channel = channel_for_version(source_version)
+    args.channel = choose_channel(args.channel, args.version, args.yes)
+    if not getattr(args, 'dev', False) and args.version is None and sys.stdin.isatty() and not args.yes:
+        print('  Проверенная версия исходников: ' + source_version)
+        answer = input('  Закрепить именно эту версию? [y/N]: ').strip().lower()
+        if answer in ('y', 'yes', 'д', 'да'):
+            args.version = source_version
 
 def confirm_plan(args, target):
     providers = [name for name, skip in (('Codex', args.skip_codex),
@@ -91,12 +126,30 @@ def confirm_plan(args, target):
     print('  Модели    ' + ' · '.join(providers))
     print('  Часовой пояс  ' + args.timezone)
     print('  Голосовые ' + ('да' if args.voice else 'нет'))
+    print('  Канал обновлений ' + CHANNEL_LABELS[getattr(args, 'channel', None) or 'stable'])
+    print('  Закреплённая версия ' + (getattr(args, 'version', None) or 'нет'))
+    print('  Автообновления ' + getattr(args, 'auto_updates', 'off'))
     print('  GitHub    ' + {'owner': 'аккаунт хозяина', 'agent': 'отдельный аккаунт агента',
                              'skip': 'подключить позже'}[getattr(args, 'github_account', None) or 'skip'])
     print('  Автозапуск ' + ('подготовить без запуска' if args.no_start else 'systemd, запуск после установки'))
     if sys.stdin.isatty() and not args.yes:
         if input('  Всё верно, установить? [Y/n]: ').strip().lower() not in ('', 'y', 'yes', 'д', 'да'):
             raise SystemExit('Установка отменена, настройки не изменены.')
+
+
+def validate_update_selection(version, channel, pin=None):
+    if channel not in CHANNELS:
+        raise ValueError('Неизвестный канал обновлений.')
+    source_channel = channel_for_version(version)
+    if CHANNELS.index(source_channel) > CHANNELS.index(channel):
+        raise ValueError('Выбранный канал не допускает версию исходников.')
+    if pin is not None:
+        if pin != version:
+            raise ValueError('--version должен совпадать с версией проверенных исходников.')
+        pin_channel = channel_for_version(pin)
+        if CHANNELS.index(pin_channel) > CHANNELS.index(channel):
+            raise ValueError('Закреплённая версия не подходит выбранному каналу.')
+    return True
 
 
 def quiet(args, label, **kwargs):
@@ -142,12 +195,23 @@ def validate(root):
     manifest = json.loads(manifest_path.read_text())
     if manifest.get('format') != 1 or not manifest.get('sha256'):
         raise SystemExit('Неизвестный формат исходников.')
+    version_path = root / 'VERSION'
+    if version_path.exists() or 'version' in manifest:
+        try:
+            version = version_path.read_text(encoding='ascii').strip()
+            if version != manifest.get('version'):
+                raise ValueError
+            channel_for_version(version)
+        except (OSError, UnicodeError, ValueError):
+            raise SystemExit('VERSION не совпадает с версией проверенного манифеста.') from None
     expected = set(manifest['sha256']) | {'MANIFEST.json'}
     for rel, wanted in manifest['sha256'].items():
         parts = PurePosixPath(rel)
         if (parts.is_absolute() or '..' in parts.parts or not parts.parts
                 or str(parts) != rel or chr(92) in rel):
             raise SystemExit('Небезопасный путь в манифесте.')
+        if runtime_path(rel):
+            raise SystemExit('Локальные данные не могут входить в исходный манифест: ' + rel)
         p = root
         for part in parts.parts:
             p = p / part
@@ -159,7 +223,13 @@ def validate(root):
             raise SystemExit('Повреждён файл: ' + rel)
     actual = set()
     for parent, dirs, files in os.walk(root, followlinks=False):
-        dirs[:] = [d for d in dirs if d not in ('.git', 'dist', '__pycache__') and '.bak' not in d]
+        base = Path(parent).relative_to(root)
+        dirs[:] = [
+            d for d in dirs
+            if d not in ('.git', 'dist', '__pycache__')
+            and '.bak' not in d
+            and not runtime_path((base / d).as_posix())
+        ]
         for name in [*dirs, *files]:
             p = Path(parent) / name
             if p.is_symlink():
@@ -168,7 +238,10 @@ def validate(root):
             if name.endswith('.pyc') or '.bak' in name:
                 continue
             p = Path(parent) / name
-            actual.add(p.relative_to(root).as_posix())
+            rel = p.relative_to(root).as_posix()
+            if runtime_path(rel):
+                continue
+            actual.add(rel)
             if p.suffix == '.py':
                 ast.parse(p.read_text(), filename=str(p))
     if actual != expected:
@@ -339,6 +412,8 @@ def setup_service(target, timezone, no_start, path_env):
         raise SystemExit('nook.service уже существует; он не перезаписан. Бот установлен без нового автозапуска.')
     service.write_text('[Unit]\nDescription=Nook Telegram assistant\nAfter=network-online.target\n\n[Service]\nType=simple\n'
                        + 'WorkingDirectory=' + str(target).replace('%', '%%') + '\n'
+                       + 'ExecStartPre=' + quote_unit(python) + ' ' + quote_unit(target / 'tools/start_guard.py')
+                       + ' ' + quote_unit(target) + '\n'
                        + 'ExecStart=' + quote_unit(python) + ' ' + quote_unit(target / 'bot.py') + '\n'
                        + 'Environment=' + quote_unit('PATH=' + path_env) + '\n'
                        + 'Environment=' + quote_unit('TZ=' + timezone) + '\n'
@@ -357,7 +432,7 @@ def setup_service(target, timezone, no_start, path_env):
 
 
 def main():
-    ap = argparse.ArgumentParser(description=__doc__)
+    ap = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     ap.add_argument('--check', action='store_true')
     ap.add_argument('--yes', action='store_true', help='Пропустить выбор набора и подтверждение плана')
     ap.add_argument('--accept-terms', action='store_true', help='Явно принять TERMS.md; --yes не заменяет согласие')
@@ -376,12 +451,17 @@ def main():
     ap.add_argument('--providers-only', action='store_true', help='Настроить модели в уже установленном боте')
     ap.add_argument('--voice', action='store_true')
     ap.add_argument('--timezone', default='Europe/Moscow')
+    ap.add_argument('--channel', choices=CHANNELS,
+                    help='канал устанавливаемого релиза и будущих обновлений')
+    ap.add_argument('--version', help='установить и закрепить указанную опубликованную версию')
+    ap.add_argument('--dev', action='store_true', help='установить из текущего локального дерева разработки')
+    ap.add_argument('--auto-updates', choices=('off', 'notify', 'confirm', 'install'), default='off',
+                    help='режим автоматических обновлений (по умолчанию выключен)')
     ap.add_argument('--owner-id', type=int)
     ap.add_argument('--token-file', type=Path)
     args = ap.parse_args()
-    if args.check or not (args.providers_only or args.finish_service or args.github_only):
-        validate(SOURCE)
     if args.check:
+        validate(SOURCE)
         return
     if sys.version_info < (3, 11) or platform.system() != 'Linux':
         raise SystemExit('Нужен Linux и Python 3.11+. Рекомендуется Ubuntu 24.04 или Debian 12+.')
@@ -417,8 +497,23 @@ def main():
         return
     if (target / 'config.json').exists() or (target != SOURCE and target.exists() and any(target.iterdir())):
         raise SystemExit('Папка назначения уже используется. Установка ничего не перезапишет.')
+    if args.dev and args.version is not None:
+        ap.error('--dev и --version несовместимы.')
+    if not args.dev and os.environ.get('NOOK_STAGED_INSTALL') != str(SOURCE):
+        raise SystemExit(install_from_source(sys.argv[1:], channel=args.channel,
+                                             version=args.version, yes=args.yes))
+    validate(SOURCE)
     accept_terms(args)
     choose_options(args)
+    try:
+        source_version = (SOURCE / 'VERSION').read_text(encoding='ascii').strip()
+        manifest_version = json.loads((SOURCE / 'MANIFEST.json').read_text())['version']
+        if source_version != manifest_version:
+            raise ValueError('VERSION не совпадает с проверенным манифестом.')
+        choose_update_settings(args, source_version)
+        validate_update_selection(source_version, args.channel, args.version)
+    except (OSError, KeyError, UnicodeError, ValueError) as exc:
+        raise SystemExit('Нельзя выбрать обновления: ' + str(exc)) from None
     confirm_plan(args, target)
     section(1, 'Знакомство · Telegram')
     token = args.token_file.read_text().strip() if args.token_file else getpass.getpass('Токен НОВОГО Telegram-бота от BotFather (ввод скрыт): ').strip()
@@ -439,11 +534,13 @@ def main():
         quiet(['sudo', '-n', 'apt-get', 'install', '-y', f'python{sys.version_info.major}.{sys.version_info.minor}-venv', 'python3-pip', 'ca-certificates', 'git', 'curl', 'openssh-client', 'procps', 'iproute2', 'ffmpeg'], 'Системные зависимости')
     os.umask(0o077)
     if target != SOURCE:
-        shutil.copytree(SOURCE, target, dirs_exist_ok=True, ignore=shutil.ignore_patterns('.git', 'dist', '__pycache__', '*.pyc', '*.bak*'))
+        shutil.copytree(SOURCE, target, dirs_exist_ok=True, ignore=ignore_source_data)
     shutil.copytree(target / "templates/runtime", target, dirs_exist_ok=True)
     render(target)
     from nook_update import record_install
     record_install(target)
+    from nook_update import save_update_settings
+    save_update_settings(target, channel=args.channel, version_pin=args.version, auto_mode=args.auto_updates)
     for folder in ('memory','logs','inbox','keys','spool/outbox','spool/mods','spool/root','tmp'):
         (target / folder).mkdir(parents=True, exist_ok=True)
     cfg = json.loads((target / 'config.example.json').read_text())

@@ -18,8 +18,11 @@ def setup(m):
             plan = await asyncio.to_thread(prepare, home)
             if not plan['changes']:
                 return await ctx.reply('✅ Доступных изменений нет.')
-            await ctx.reply('🏡 **Обновление Nook**\n\nВерсия: `' + plan['revision'][:10] +
-                '`\nФайлов программы: ' + str(len(plan['changes'])) +
+            version = plan.get('version') or plan['revision'][:10]
+            channel = plan.get('channel')
+            channel_note = ('\nКанал: ' + channel) if channel else '\nКанал: прежний режим main'
+            await ctx.reply(f'🏡 **Обновление Nook**\n\nВерсия: `{version}`{channel_note}'
+                f'\nФайлов программы: {len(plan["changes"])}' +
                 '\n\nНастройки, память, переписка и свои дополнения сохранятся. '
                 'При конфликте с местными правками обновление остановится. '
                 'Будет резервная копия кода и проверка запуска с откатом при неудаче.',

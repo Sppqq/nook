@@ -3,13 +3,16 @@
 import hashlib
 import ipaddress
 import json
+from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 import re
 import subprocess
+import sys
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = '0.1.1'
+sys.path.insert(0, str(ROOT))
+from release_channels import SEMVER
 PRIVATE = {'memory', 'spool', 'keys', 'logs', 'inbox', 'tmp', 'dist', '.git', '.venv'}
 PRIVATE_FILES = {'.nook-runtime.lock', '.nook-install.json', 'config.json', 'state.json', 'nodes.json', 'ssh_config', 'secrets.env', '.env'}
 PATTERNS = (
@@ -54,33 +57,126 @@ def validate_file(root, name):
 def encode(value):
     return (json.dumps(value, ensure_ascii=False, indent=2) + '\n').encode()
 
+def project_version(root=ROOT):
+    version = (Path(root) / 'VERSION').read_text(encoding='ascii').strip()
+    if not SEMVER.fullmatch(version):
+        raise ValueError('VERSION must contain a valid SemVer version')
+    return version
+
+def build_sbom(root, version):
+    root = Path(root)
+    packages = {}
+    requirement = re.compile(
+        r'^([A-Za-z0-9][A-Za-z0-9._-]*)(?:\[[A-Za-z0-9_,.-]+\])?==([^\s;]+)$')
+    for filename in ('requirements.txt', 'requirements-voice.txt'):
+        path = root / filename
+        if not path.exists():
+            continue
+        for line in path.read_text(encoding='utf-8').splitlines():
+            line = line.split('#', 1)[0].strip()
+            if not line:
+                continue
+            match = requirement.fullmatch(line)
+            if not match:
+                raise ValueError('Unsupported dependency declaration in ' + filename)
+            name, package_version = match.groups()
+            key = name.casefold().replace('_', '-')
+            previous = packages.get(key)
+            if previous and previous != package_version:
+                raise ValueError('Conflicting dependency versions: ' + name)
+            packages[key] = package_version
+    revision = subprocess.run(
+        ['git', 'rev-parse', 'HEAD'], cwd=root, check=True,
+        capture_output=True, text=True).stdout.strip()
+    epoch = int(subprocess.run(
+        ['git', 'log', '-1', '--format=%ct'], cwd=root, check=True,
+        capture_output=True, text=True).stdout.strip())
+    spdx_packages, relationships = [], []
+    for key, package_version in sorted(packages.items()):
+        ident = 'SPDXRef-Package-' + re.sub(r'[^A-Za-z0-9.-]', '-', key)
+        purl = f'pkg:pypi/{key}@{package_version}'
+        spdx_packages.append({
+            'name': key,
+            'SPDXID': ident,
+            'versionInfo': package_version,
+            'downloadLocation': 'NOASSERTION',
+            'filesAnalyzed': False,
+            'licenseConcluded': 'NOASSERTION',
+            'licenseDeclared': 'NOASSERTION',
+            'copyrightText': 'NOASSERTION',
+            'externalRefs': [{
+                'referenceCategory': 'PACKAGE-MANAGER',
+                'referenceType': 'purl',
+                'referenceLocator': purl,
+            }],
+        })
+        relationships.append({
+            'spdxElementId': 'SPDXRef-DOCUMENT',
+            'relationshipType': 'DESCRIBES',
+            'relatedSpdxElement': ident,
+        })
+    document = {
+        'spdxVersion': 'SPDX-2.3',
+        'dataLicense': 'CC0-1.0',
+        'SPDXID': 'SPDXRef-DOCUMENT',
+        'name': f'Nook {version} declared direct Python dependencies',
+        'documentNamespace': f'https://spdx.org/spdxdocs/nook-{version}-{revision}',
+        'creationInfo': {
+            'created': datetime.fromtimestamp(epoch, timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+            'creators': ['Tool: Nook release builder'],
+        },
+        'packages': spdx_packages,
+        'relationships': relationships,
+        'comment': ('Direct, exactly pinned requirements from requirements*.txt only. '
+                    'This SBOM does not include transitive dependencies or OS packages.'),
+    }
+    return encode(document)
+
 def build(root=ROOT):
-    result = subprocess.run(['git', 'ls-files', '-z'], cwd=root, check=True, capture_output=True)
-    names = sorted(set(result.stdout.decode().split('\0')) - {''})
+    version = project_version(root)
+    result = subprocess.run(['git', 'ls-files', '--stage', '-z'],
+                            cwd=root, check=True, capture_output=True)
+    modes = {}
+    for entry in filter(None, result.stdout.decode().split('\0')):
+        metadata, name = entry.split('\t', 1)
+        mode, _, stage = metadata.split()
+        if stage != '0' or mode not in {'100644', '100755'}:
+            raise ValueError('Unsupported Git index entry: ' + name)
+        modes[name] = mode
+    names = sorted(modes)
+    if 'NOOK_RELEASE.json' in names:
+        raise ValueError('NOOK_RELEASE.json is reserved for build provenance')
     if 'LICENSE' not in names or 'install.py' not in names:
         raise SystemExit('Stage the reviewed source files with git add before building.')
     files = {name: validate_file(root, name) for name in names if name != 'MANIFEST.json'}
-    manifest = encode({'format': 1, 'update_api': 1, 'version': VERSION, 'sha256': {
+    manifest = encode({'format': 1, 'update_api': 1, 'version': version, 'sha256': {
         name: hashlib.sha256(data).hexdigest() for name, data in files.items()}})
     (root / 'MANIFEST.json').write_bytes(manifest)
     files['MANIFEST.json'] = manifest
     dist = root / 'dist'
     dist.mkdir(exist_ok=True)
-    archive = dist / ('nook-' + VERSION + '.zip')
-    bundle = {'format': 1, 'version': VERSION, 'files': {}}
+    archive = dist / ('nook-' + version + '.zip')
+    bundle = {'format': 1, 'version': version, 'files': {}}
+    revision = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip()
     with zipfile.ZipFile(archive, 'w', compression=zipfile.ZIP_DEFLATED) as output:
         for name, data in sorted(files.items()):
-            executable = bool((root / name).stat().st_mode & 0o111)
+            executable = modes[name] == '100755'
             info = zipfile.ZipInfo(name, date_time=(2026, 1, 1, 0, 0, 0))
+            info.create_system = 3
             info.compress_type = zipfile.ZIP_DEFLATED
             info.external_attr = (0o100755 if executable else 0o100644) << 16
             output.writestr(info, data)
             bundle['files'][name] = {'content': data.decode(), 'sha256': hashlib.sha256(data).hexdigest(), 'executable': executable}
+        info = zipfile.ZipInfo('NOOK_RELEASE.json', date_time=(2026, 1, 1, 0, 0, 0))
+        info.create_system = 3
+        info.external_attr = 0o100644 << 16
+        output.writestr(info, encode({'version': version, 'revision': revision}))
     (dist / 'source.json').write_bytes(encode(bundle))
+    (dist / 'SBOM.spdx.json').write_bytes(build_sbom(root, version))
     (dist / 'SHA256SUMS').write_text(''.join(
         hashlib.sha256((dist / name).read_bytes()).hexdigest() + '  ' + name + '\n'
-        for name in [archive.name, 'source.json']))
-    print(f'{len(files)} files; {archive.name}; source.json; SHA256SUMS')
+        for name in [archive.name, 'source.json', 'SBOM.spdx.json']), encoding='ascii', newline='\n')
+    print(f'{len(files)} files; {archive.name}; source.json; SBOM.spdx.json; SHA256SUMS')
     return files
 
 if __name__ == '__main__':

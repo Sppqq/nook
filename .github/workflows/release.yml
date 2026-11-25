@@ -1,0 +1,149 @@
+name: Verified release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag. Leave empty to prepare the selected branch.
+        type: string
+      promote_from:
+        description: Published tag in the preceding channel.
+        type: string
+      publish:
+        description: Request publication from protected main.
+        type: boolean
+        default: false
+
+permissions: {}
+
+concurrency:
+  group: nook-release
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      tag: ${{ steps.candidate.outputs.tag }}
+      channel: ${{ steps.candidate.outputs.channel }}
+      revision: ${{ steps.candidate.outputs.revision }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+      - name: Select a candidate
+        id: candidate
+        env:
+          TAG: ${{ inputs.tag }}
+          PUBLISH: ${{ inputs.publish }}
+          PROMOTE_FROM: ${{ inputs.promote_from }}
+        run: |
+          if [[ "$PUBLISH" == true ]]; then
+            [[ "$GITHUB_REPOSITORY" == Sppqq/nook && "$GITHUB_REF" == refs/heads/main && -n "$TAG" ]]
+          fi
+          if [[ -n "$TAG" ]]; then
+            python -c 'import sys; from release_channels import channel_for_version; assert sys.argv[1].startswith("v"); channel_for_version(sys.argv[1][1:])' "$TAG"
+            revision="$(git rev-parse --verify "refs/tags/$TAG^{commit}")"
+            if [[ "$PUBLISH" == true ]]; then
+              git merge-base --is-ancestor "$revision" "$GITHUB_SHA"
+            fi
+            python tools/release_promotion.py "$TAG" "$revision" "$PROMOTE_FROM"
+            git checkout --detach "$revision"
+          else
+            [[ -z "$PROMOTE_FROM" ]]
+            TAG="v$(cat VERSION)"
+          fi
+          channel="$(python -c 'import sys; from release_channels import channel_for_version; print(channel_for_version(sys.argv[1][1:]))' "$TAG")"
+          python tools/release_notes.py "$TAG" > "$RUNNER_TEMP/release-notes.md"
+          printf 'tag=%s\nchannel=%s\nrevision=%s\n' "$TAG" "$channel" "$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Run release checks
+        run: |
+          python -m pip install -r requirements.txt
+          python -m unittest discover -s tests -v
+          python setup/nook-api/test_api.py
+          python -m tools.smoke_runtime
+          for script in bootstrap.sh install.sh setup/install-root.sh; do bash -n "$script"; done
+          bash install.sh --check
+          python tools/sync_bootstrap.py --check
+          python tools/build_release.py
+          git diff --exit-code
+          (cd dist && sha256sum -c SHA256SUMS)
+          cp "$RUNNER_TEMP/release-notes.md" dist/
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: verified-candidate
+          path: dist/
+          if-no-files-found: error
+          retention-days: 14
+
+  attest:
+    needs: prepare
+    if: inputs.publish && github.ref == 'refs/heads/main' && github.repository == 'Sppqq/nook'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      attestations: write
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: verified-candidate
+          path: dist
+      - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        id: provenance
+        with:
+          subject-checksums: dist/SHA256SUMS
+      - name: Save the Sigstore bundle
+        env:
+          BUNDLE: ${{ steps.provenance.outputs.bundle-path }}
+        run: cp "$BUNDLE" provenance.jsonl
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-provenance
+          path: provenance.jsonl
+          if-no-files-found: error
+
+  publish:
+    needs: [prepare, attest]
+    if: inputs.publish && github.ref == 'refs/heads/main' && github.repository == 'Sppqq/nook'
+    runs-on: ubuntu-latest
+    environment: ${{ needs.prepare.outputs.channel == 'stable' && 'release-stable' || 'release-prerelease' }}
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: verified-candidate
+          path: dist
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-provenance
+          path: dist
+      - name: Publish the prepared candidate
+        env:
+          TAG: ${{ needs.prepare.outputs.tag }}
+          CHANNEL: ${{ needs.prepare.outputs.channel }}
+          REVISION: ${{ needs.prepare.outputs.revision }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          STABLE_RELEASE_ENABLED: ${{ secrets.STABLE_RELEASE_ENABLED }}
+        run: |
+          options=(--prerelease)
+          if [[ "$CHANNEL" == stable ]]; then
+            [[ "$STABLE_RELEASE_ENABLED" == true ]] || { echo 'Stable publishing is disabled'; exit 1; }
+            options=()
+          fi
+          cd dist
+          sha256sum -c SHA256SUMS
+          [[ "$(gh api "repos/$GH_REPO/commits/$TAG" --jq .sha)" == "$REVISION" ]]
+          gh attestation verify "nook-${TAG#v}.zip" --bundle provenance.jsonl \
+            --repo "$GH_REPO" --signer-workflow "$GH_REPO/.github/workflows/release.yml" \
+            --source-ref refs/heads/main --source-digest "$GITHUB_SHA" --deny-self-hosted-runners
+          gh release create "$TAG" "nook-${TAG#v}.zip" source.json SBOM.spdx.json SHA256SUMS provenance.jsonl \
+            --verify-tag "${options[@]}" --title "Nook $TAG" --notes-file release-notes.md

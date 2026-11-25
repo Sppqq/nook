@@ -14,6 +14,8 @@ import unittest
 import uuid
 import time
 
+from provider_sessions import resume_for_engine
+
 ROOT = Path(__file__).resolve().parents[1]
 
 def functions(names, **values):

@@ -10,14 +10,25 @@ jobs:
         python: ['3.11', '3.12']
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: ${{ matrix.python }}
       - run: python -m pip install -r requirements.txt
       - run: python -m unittest discover -s tests -v
       - run: python setup/nook-api/test_api.py
-      - run: python tools/smoke_runtime.py
+      - run: python -m tools.smoke_runtime
       - run: python tools/build_release.py
-      - run: bash -n bootstrap.sh install.sh
+      - run: python tools/sync_bootstrap.py --check
+      - run: for script in bootstrap.sh install.sh setup/install-root.sh; do bash -n "$script"; done
       - run: bash install.sh --check
       - run: git diff --exit-code -- MANIFEST.json
+      - name: Exercise historical migration with user systemd
+        if: matrix.python == '3.12'
+        run: |
+          sudo loginctl enable-linger "$(id -un)"
+          export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+          export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
+          timeout 30 bash -c 'until systemctl --user show-environment >/dev/null 2>&1; do sleep 1; done'
+          python -m tools.check_legacy_systemd "dist/nook-$(cat VERSION).zip"

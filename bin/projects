@@ -13,7 +13,7 @@ import urllib.request
 import base64
 from zoneinfo import ZoneInfo
 
-BASE = Path('__NOOK_USER_HOME__/nook')
+BASE = Path(__file__).resolve().parents[1]
 REGISTRY = Path(os.environ.get('NOOK_REGISTRY', str(BASE / 'memory/registry.json')))
 JSON_PATH = BASE / 'memory/projects.json'
 MD_PATH = BASE / 'memory/projects.md'
