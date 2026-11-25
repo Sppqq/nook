@@ -1252,12 +1252,16 @@ async def get_limits(max_age=60):
         return await asyncio.to_thread(limits_cached)
 
 
-def win_name(mins):
+def win_name(mins, *, english=False):
     if mins >= 10080 and mins % 10080 == 0:
+        if english:
+            return "Week" if mins == 10080 else f"{mins // 10080} wk"
         return "неделя" if mins == 10080 else f"{mins // 10080} нед"
     if mins >= 1440 and mins % 1440 == 0:
-        return f"{mins // 1440} дн"
-    return f"{mins // 60} ч" if mins >= 60 else f"{mins} мин"
+        return f"{mins // 1440} {'d' if english else 'дн'}"
+    if mins >= 60:
+        return f"{mins // 60} {'h' if english else 'ч'}"
+    return f"{mins} {'min' if english else 'мин'}"
 
 
 def until(ts):
@@ -1574,7 +1578,11 @@ def plain_buttons():
     return ui_mode() == "classic"
 
 
-from ui_settings import option as ui_option, filter_keyboard, settings_view, apply_action
+from ui_settings import option as ui_option, filter_keyboard, settings_view, apply_action, translate
+
+
+def ui_text(russian, english):
+    return translate(STATE, russian, english)
 
 
 def custom_keyboard(markup, scope):
@@ -1618,7 +1626,8 @@ def kb(*rows):
 
 
 def back(to="menu"):
-    return (btn("Назад", to, "back"), btn("Меню", "menu", "home")) if to != "menu" else (btn("Меню", "menu", "back"),)
+    menu = ui_text("Меню", "Menu")
+    return (btn(ui_text("Назад", "Back"), to, "back"), btn(menu, "menu", "home")) if to != "menu" else (btn(menu, "menu", "back"),)
 
 
 def stop_kb():
@@ -1702,11 +1711,14 @@ QUICK = {
 
 def busy_line():
     parts = []
-    for lane, who in ((user_lane, "твоя задача"), (bg_lane, "фоновая задача")):
+    for lane, who in ((user_lane, ui_text("твоя задача", "your task")),
+                      (bg_lane, ui_text("фоновая задача", "background task"))):
         if lane.current:
             el = int(time.time() - lane.current.started)
             parts.append(f"{who} {el // 60}:{el % 60:02d}")
-    return f"{E('busy')} работаю: " + ", ".join(parts) if parts else f"{E('ok')} свободен"
+    if parts:
+        return f"{E('busy')} " + ui_text("работаю: ", "Working: ") + ", ".join(parts)
+    return f"{E('ok')} " + ui_text("свободен", "Idle")
 
 
 def jobs_list():
@@ -1730,26 +1742,28 @@ async def model_quota_status():
 async def view_menu():
     du = shutil.disk_usage("/")
     _, short = await model_quota_status()
+    on_off = ui_text("вкл", "on") if STATE["watch"] else ui_text("выкл", "off")
     text = (f"{E('home')} **Nook**\n\n{busy_line()}\n"
-            f"{E('disk')} диск {du.used / du.total * 100:.0f}%  ·  "
-            f"{E('eye' if STATE['watch'] else 'eyeoff')} надзор {'вкл' if STATE['watch'] else 'выкл'}"
+            f"{E('disk')} {ui_text('диск', 'Disk')} {du.used / du.total * 100:.0f}%  ·  "
+            f"{E('eye' if STATE['watch'] else 'eyeoff')} {ui_text('надзор', 'Monitoring')} {on_off}"
             + f"\n{E('robot')} {model_label()}" + (f"  ·  {short}" if short else "")
-            + (f"\n{E('warn')} **полный root до {dt.datetime.fromtimestamp(full_until()):%H:%M}**"
+            + (f"\n{E('warn')} **{ui_text('полный root до', 'Full root access until')} {dt.datetime.fromtimestamp(full_until()):%H:%M}**"
                if full_until() else "")
-            + "\n\n*Просто напиши, что сделать, — или выбери ниже.*")
+            + ui_text("\n\n*Просто напиши, что сделать, — или выбери ниже.*",
+                      "\n\n*Tell me what to do or choose an action below.*"))
     busy = user_lane.current or bg_lane.current
     n = len(jobs_list())
     return text, custom_keyboard(kb(
-        (btn("Статус", "status", "status"), btn("Графики", "graph", "load"), btn("Лимиты", "limits", "limits")),
-        (btn("Проверь всё", "q:check", "check", "success"), btn("Уборка", "q:clean", "clean", "success")),
-        (btn(f"Задачи{f' · {n}' if n else ''}", "jobs", "jobs"),
-         btn(f"Ноды{f' · {len(nodes())}' if nodes() else ''}", "nodes", "node"), btn("Ещё", "more", "more")),
-        (btn(f"Избранное · {len(favs())}", "favs", "spark"),) if favs() else None,
-        (btn(f"Сводка · {len(STATE.get('digest', []))}", "digest", "info"),) if STATE.get("digest") else None,
-        (btn("Настройки", "settings", "more"),),
+        (btn(ui_text("Статус", "Status"), "status", "status"), btn(ui_text("Графики", "Charts"), "graph", "load"), btn(ui_text("Лимиты", "Usage"), "limits", "limits")),
+        (btn(ui_text("Проверь всё", "Run checks"), "q:check", "check", "success"), btn(ui_text("Уборка", "Clean up"), "q:clean", "clean", "success")),
+        (btn(f"{ui_text('Задачи', 'Tasks')}{f' · {n}' if n else ''}", "jobs", "jobs"),
+         btn(f"{ui_text('Ноды', 'Nodes')}{f' · {len(nodes())}' if nodes() else ''}", "nodes", "node"), btn(ui_text("Ещё", "More"), "more", "more")),
+        (btn(f"{ui_text('Избранное', 'Favorites')} · {len(favs())}", "favs", "spark"),) if favs() else None,
+        (btn(f"{ui_text('Сводка', 'Digest')} · {len(STATE.get('digest', []))}", "digest", "info"),) if STATE.get("digest") else None,
+        (btn(ui_text("Настройки", "Settings"), "settings", "more"),),
         *mod_rows("menu"),
-        (btn("Остановить", "stop", "stop", "danger"),) if busy else None,
-        (btn("Закрыть", "close", "cross"),),
+        (btn(ui_text("Остановить", "Stop"), "stop", "stop", "danger"),) if busy else None,
+        (btn(ui_text("Закрыть", "Close"), "close", "cross"),),
     ), "menu")
 
 
@@ -2162,36 +2176,53 @@ async def view_root():
 
 async def view_more():
     w = STATE["watch"]
-    return (f"{E('more')} **Ещё**\n\n"
-            f"{E('eye')} **Автонадзор** — каждые {win_name(WATCH_INTERVAL // 60)} смотрю за сервисами, сам чиню упавшее и пишу тебе; "
-            f"в {CFG.get('patrol_time', '12:00')} — ежедневный обход.\n\n"
-            f"{E('new')} **Новый разговор** — забыть контекст переписки (заметки о сервере остаются)."
-            + (f" Сейчас в разговоре ~{ctx // 1000}k токенов, сжимаю на {CFG.get('compact_tokens', COMPACT_TOKENS) // 1000}k; "
-               f"после {CFG.get('idle_reset_hours', IDLE_RESET_H)} ч тишины начинаю заново сам." if (ctx := context_tokens()) else "")
-            + "\n\n"
-            f"{E('login')} **Войти в Codex** — если слетела авторизация."), kb(
-        (btn("Настройки интерфейса", "settings", "more"),),
-        (btn(f"Модель: {model_label()}", "model", "robot", "primary"),),
-        (btn(f"Навыки и сервисы · {len(list_skills()) + len(list_mcp())}", "skills", "spark"),),
-        (btn(f"Охрана нод: {'вкл' if STATE.get('guard', True) else 'выкл'}", "guard", "shield"),),
-        (btn(f"Моды · {len(REG.mods)}", "mods", "plus"), btn("Что я делал", "journal", "jobs")),
-        (btn("Бэкапы", "backups", "disk"), btn("Обновления", "updcheck", "refresh")),
-        (btn("Оплата серверов", "pay", "cal"), btn(f"Деплой{f' · {len(deploys())}' if deploys() else ''}", "deploy", "repeat")),
-        (btn(f"Гости{f' · {len(guests())}' if guests() else ''}", "guests", "eye"),
-         btn("Уведомления: " + ("тихо" if quiet() else "всё"), "nmode", "bell")),
-        (btn("Root: " + (f"полный до {dt.datetime.fromtimestamp(full_until()):%H:%M}" if full_until()
-                         else "по кнопке"), "root", "login", "danger" if full_until() else None),),
-        (btn(f"Надзор: {'включён' if w else 'выключен'}", "watch",
+    interval = WATCH_INTERVAL // 60
+    patrol_time = CFG.get('patrol_time', '12:00')
+    watch_text = ui_text(
+        f"**Автонадзор** — каждые {win_name(interval)} смотрю за сервисами, сам чиню упавшее и пишу тебе; "
+        f"в {patrol_time} — ежедневный обход.",
+        f"**Monitoring** checks services every {interval} minutes, attempts recovery, and notifies you. "
+        f"Daily check at {patrol_time}.",
+    )
+    new_text = ui_text(
+        "**Новый разговор** — забыть контекст переписки (заметки о сервере остаются).",
+        "**New conversation** starts a fresh chat context and keeps your server notes.",
+    )
+    if ctx := context_tokens():
+        compact = CFG.get('compact_tokens', COMPACT_TOKENS) // 1000
+        idle = CFG.get('idle_reset_hours', IDLE_RESET_H)
+        new_text += ui_text(
+            f" Сейчас в разговоре ~{ctx // 1000}k токенов, сжимаю на {compact}k; "
+            f"после {idle} ч тишины начинаю заново сам.",
+            f" This conversation uses ~{ctx // 1000}k tokens. Nook compacts at {compact}k "
+            f"and starts a fresh context after {idle} hours of inactivity.",
+        )
+    login_text = ui_text("**Войти в Codex** — если слетела авторизация.",
+                         "**Sign in to Codex** when your authorization expires.")
+    return (f"{E('more')} **{ui_text('Ещё', 'More')}**\n\n"
+            f"{E('eye')} {watch_text}\n\n{E('new')} {new_text}\n\n{E('login')} {login_text}"), kb(
+        (btn(ui_text("Настройки интерфейса", "Interface settings"), "settings", "more"),),
+        (btn(f"{ui_text('Модель:', 'Model:')} {model_label()}", "model", "robot", "primary"),),
+        (btn(f"{ui_text('Навыки и сервисы', 'Skills and services')} · {len(list_skills()) + len(list_mcp())}", "skills", "spark"),),
+        (btn(f"{ui_text('Охрана нод:', 'Node security:')} {ui_text('вкл', 'on') if STATE.get('guard', True) else ui_text('выкл', 'off')}", "guard", "shield"),),
+        (btn(f"{ui_text('Моды', 'Mods')} · {len(REG.mods)}", "mods", "plus"), btn(ui_text("Что я делал", "Activity log"), "journal", "jobs")),
+        (btn(ui_text("Бэкапы", "Backups"), "backups", "disk"), btn(ui_text("Обновления", "Software updates"), "updcheck", "refresh")),
+        (btn(ui_text("Оплата серверов", "Server bills"), "pay", "cal"), btn(f"{ui_text('Деплой', 'Deployments')}{f' · {len(deploys())}' if deploys() else ''}", "deploy", "repeat")),
+        (btn(f"{ui_text('Гости', 'Guests')}{f' · {len(guests())}' if guests() else ''}", "guests", "eye"),
+         btn(ui_text("Уведомления:", "Notifications:") + " " + (ui_text("тихо", "quiet") if quiet() else ui_text("всё", "all")), "nmode", "bell")),
+        (btn("Root: " + (f"{ui_text('полный до', 'full until')} {dt.datetime.fromtimestamp(full_until()):%H:%M}" if full_until()
+                         else ui_text("по кнопке", "by approval")), "root", "login", "danger" if full_until() else None),),
+        (btn(f"{ui_text('Надзор:', 'Monitoring:')} {ui_text('включён', 'enabled') if w else ui_text('выключен', 'disabled')}", "watch",
              "eye" if w else "eyeoff", "success" if w else "danger"),),
-        (btn(f"Не слежу · {len(STATE.get('muted', []))}", "muted", "eyeoff"),) if STATE.get("muted") else None,
-        (btn("Новый разговор", "new", "new"), btn("Войти в Codex", "login", "login")),
+        (btn(f"{ui_text('Не слежу', 'Muted topics')} · {len(STATE.get('muted', []))}", "muted", "eyeoff"),) if STATE.get("muted") else None,
+        (btn(ui_text("Новый разговор", "New conversation"), "new", "new"), btn(ui_text("Войти в Codex", "Sign in to Codex"), "login", "login")),
         *mod_rows("more"),
         *(mod_rows("menu") if not ui_option(STATE, "menu_mods") else []),
-        (btn("Статус", "status", "status"), btn("Графики", "graph", "load"), btn("Лимиты", "limits", "limits")),
-        (btn("Проверь всё", "q:check", "check"), btn("Уборка", "q:clean", "clean")),
-        (btn("Задачи", "jobs", "jobs"), btn("Ноды", "nodes", "node")),
-        (btn("Избранное", "favs", "spark"), btn("Сводка", "digest", "info")),
-        (btn("Очистить чат", "wipe", "clean"),),
+        (btn(ui_text("Статус", "Status"), "status", "status"), btn(ui_text("Графики", "Charts"), "graph", "load"), btn(ui_text("Лимиты", "Usage"), "limits", "limits")),
+        (btn(ui_text("Проверь всё", "Run checks"), "q:check", "check"), btn(ui_text("Уборка", "Clean up"), "q:clean", "clean")),
+        (btn(ui_text("Задачи", "Tasks"), "jobs", "jobs"), btn(ui_text("Ноды", "Nodes"), "nodes", "node")),
+        (btn(ui_text("Избранное", "Favorites"), "favs", "spark"), btn(ui_text("Сводка", "Digest"), "digest", "info")),
+        (btn(ui_text("Очистить чат", "Clear chat"), "wipe", "clean"),),
         back())
 
 
@@ -2349,9 +2380,9 @@ async def handle_button(cb: CallbackQuery):
         try:
             section = apply_action(STATE, data)
         except ValueError:
-            return await cb.answer("Эта настройка уже недоступна")
+            return await cb.answer(ui_text("Эта настройка уже недоступна", "This setting is unavailable"))
         save_state()
-        await cb.answer("Сохранено")
+        await cb.answer(ui_text("Сохранено", "Saved"))
         return await show(chat, "settings" if section == "home" else "settings_" + section, mid)
     if data.endswith("!") and data[:-1] in VIEWS:
         FORCE.set(True)
@@ -4958,25 +4989,26 @@ async def mods_loop():
 async def view_mods():
     files = modsys.mod_files()
     dis = set(modsys.load_conf().get("disabled", []))
-    lines = [f"{E('plus')} **Моды**", "",
-             "Мои расширения: команды, кнопки, фоновые задачи. Попроси «сделай мод, который …» — напишу и подключу "
-             "на лету, без перезапуска.", ""]
+    lines = [f"{E('plus')} **{ui_text('Моды', 'Mods')}**", "",
+             ui_text("Мои расширения: команды, кнопки, фоновые задачи. Попроси «сделай мод, который …» — напишу и подключу "
+                     "на лету, без перезапуска.",
+                     "Mods add commands, buttons, and background jobs. Ask Nook to write and load a mod."), ""]
     rows = []
     for n in files:
         m = REG.mods.get(n)
         if n in dis:
-            lines.append(f"⚪ **{n}** — выключен")
+            lines.append(f"⚪ **{n}** — {ui_text('выключен', 'disabled')}")
         elif n in REG.failed:
-            lines.append(f"🔴 **{n}** — не загрузился: `{REG.failed[n].strip().splitlines()[-1][:120]}`")
+            lines.append(f"🔴 **{n}** — {ui_text('не загрузился', 'failed to load')}: `{REG.failed[n].strip().splitlines()[-1][:120]}`")
         elif m:
-            extra = [f"/{c}" for c in m.commands] + [f"[{t}]" for t, *_ in m.buttons]
+            extra = [f"/{c}" for c in m.commands] + [f"[{m.button_label(key, label)}]" for label, key, _, _ in m.buttons]
             lines.append(f"🟢 **{n}** — {m.title}" + (f"\n    {' '.join(extra)}" if extra else ""))
-        rows.append((btn(("Включить " if n in dis else "Выключить ") + n, f"mt:{n}",
+        rows.append((btn((ui_text("Включить ", "Enable ") if n in dis else ui_text("Выключить ", "Disable ")) + n, f"mt:{n}",
                          "ok" if n in dis else "eyeoff"),))
     if not files:
-        lines.append("*Пока ни одного.*")
+        lines.append(ui_text("*Пока ни одного.*", "*No mods installed.*"))
     return "\n".join(lines), kb(*mod_rows("mods"), *rows,
-                                (btn("Перечитать моды", "mreload", "refresh"), btn("Перезапуск ядра", "mrestart", "repeat")),
+                                (btn(ui_text("Перечитать моды", "Reload mods"), "mreload", "refresh"), btn(ui_text("Перезапуск ядра", "Restart core"), "mrestart", "repeat")),
                                 back("more"))
 
 

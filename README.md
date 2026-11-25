@@ -75,7 +75,11 @@ We have not run all three projects under the same workload. The process snapshot
 
 ## Update without reinstalling
 
-Open **More → Mods → Обновить Nook** to check GitHub and confirm an update. Nook preserves your configuration, memory, conversations, keys, and custom extensions. Conflicting local source changes stop the update. It backs up affected code, waits for current tasks, and uses an independent supervisor to restart the bot and roll back failed startup. Dependency or data-format migrations require separate work.
+Open **More → Mods → Update Nook** (Russian: **Ещё → Моды → Обновить Nook**) to check GitHub and confirm an update. Nook preserves your configuration, memory, conversations, keys, and custom extensions. Conflicting local source changes stop the update. A separate supervisor waits for current tasks, restarts the bot, checks startup and rolls back if it fails.
+
+The Nightly candidate supports signed compatible Python dependency changes. It prepares a new environment and verifies a full local backup before switching. Data-format changes require their own migration.
+
+In the candidate, choose **Menu → Settings → English** for the main menu, interface settings, release updates and the Codex pool. Some operational notifications, commands, installer screens and mods still use Russian.
 
 [Update and recovery guide](docs/UPDATES.md) · CLI: `bin/nook-update check`. Automatic restarts use the installer's user `nook.service`. See the guide for the available paths from v0.1.0 and v0.1.1. Do not rerun the installer to update.
 

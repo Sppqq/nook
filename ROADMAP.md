@@ -2,6 +2,10 @@
 
 ## Current work
 
+- The owner can switch the main Telegram menu, interface settings, release
+  update screens, and Codex pool between Russian and English. Complete localization
+  of the remaining Telegram views, operational notifications, and installer.
+
 - Current local line coverage is 25.2% for `bot.py`, 85.7% for the pool,
   74.7% for the updater and 62.4% for legacy migration. Focus on the queue, Telegram entry points,
   and recovery branches to close the core coverage gap.
@@ -36,8 +40,8 @@
 - Iteration 4 extracts Telegram identity checks and durable scheduled-job
   storage. Actual aiogram dispatch and the existing `later` CLI exercise
   these paths without a production bot.
-- The release owner runbook records the same-repository PR and push blockage,
-  branch/tag/environment settings, and repeatable candidate promotion.
+- The release owner runbook records branch, tag, and environment settings
+  and repeatable candidate promotion. Push and PR checks run on PR #9.
 - Mercury's shell executor has bounded capture, a total request deadline,
   duplicate tool-ID handling and retry suppression after uncertain outcomes.
   The Linux benchmark measures startup/import, chart rendering and the
@@ -206,9 +210,6 @@
 
 ## Next acceptance gates
 
-- Iteration 5 local extensions and provider session/failover changes are
-  implemented and locally verified; send the session stage to PR #7 and
-  verify its Actions jobs before counting it complete.
 - The legacy SSH bootstrap handles exact `v0.1.0` and `v0.1.1`
   installations with an attested target release. Linux CI checks both trees
   with a disposable user systemd service and a local candidate artifact.
@@ -216,21 +217,21 @@
   an initial bootstrap because its immutable source has no Telegram updater.
   The current updater can migrate dependencies after adoption. The
   original v0.1.1 updater requires matching dependencies for first adoption.
-- Raise measured meaningful coverage from 41% overall / 19% `bot.py` toward
-  50% / 30%; prioritize direct bot lifecycle and security boundary behavior.
+- Raise core line coverage toward 90%. Prioritize direct bot lifecycle and
+  security boundary behavior, with 30% for `bot.py` as the next milestone.
 - Add bounded protocol version/capability negotiation and revocation tests
   without changing existing peer chat behavior or granting arbitrary remote
   command execution.
 
-- Validate the release workflow on GitHub with the owner-selected profile;
-  test a real disposable Telegram/systemd installation and rollback before
-  publishing the Alpha tag.
+- Run a real disposable Telegram/systemd installation and rollback before
+  promoting the next candidate to Alpha. Check the installed provider CLI
+  and session continuity on the same host.
 - Decide and document how to resolve the existing GitHub releases whose
   prerelease flags disagree with their stable SemVer tags; do not silently
   rewrite those releases.
-- Add independent release signing/attestation, same-artifact promotion,
-  Python 3.11 CI evidence, measured coverage and reproducible performance /
-  reliability tests.
+- Obtain an independent review of release trust and recovery controls.
+  Continue measuring coverage and reproduce the performance and reliability
+  checks on dedicated VPS hardware.
 - Continue small compatibility-preserving refactors only after establishing
   focused tests for the affected bot/provider behavior.
 

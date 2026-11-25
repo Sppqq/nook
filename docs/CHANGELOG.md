@@ -5,6 +5,7 @@
 - Add optional Codex account pooling with per-account quotas and safe conversation continuation.
 - Adopt the updater from the original v0.1.1 Telegram menu and preserve the current channel.
 - Stage Python dependency changes in signed upgrades and roll back code and environment if startup fails.
+- Offer English for the main menus, release updates and Codex account controls through Telegram settings.
 
 ## 0.1.2-alpha.1 — published
 

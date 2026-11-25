@@ -10,13 +10,17 @@ import backup_manager
 import nook_update
 from release_channels import CHANNEL_LABELS, eligible_releases, installable_releases
 
-AUTO_LABELS = {'off': 'Выключено', 'notify': 'Только уведомления',
-               'confirm': 'Установка после подтверждения',
-               'install': 'Автоматическая установка новой версии'}
+AUTO_LABELS = {
+    'off': ('Выключено', 'Off'),
+    'notify': ('Только уведомления', 'Notify only'),
+    'confirm': ('Установка после подтверждения', 'Install after approval'),
+    'install': ('Автоматическая установка новой версии', 'Install automatically'),
+}
 CHECK_INTERVAL = 12 * 60 * 60
 
 
 def setup(m):
+    t = m.text
     home = Path(__file__).resolve().parents[1]
 
     def settings():
@@ -24,24 +28,31 @@ def setup(m):
 
     def local_version():
         try:
-            return json.loads((home / 'MANIFEST.json').read_text()).get('version', 'неизвестна')
+            return json.loads((home / 'MANIFEST.json').read_text()).get('version', t('неизвестна', 'unknown'))
         except (OSError, ValueError):
-            return 'неизвестна'
+            return t('неизвестна', 'unknown')
 
     def channel_name(value):
-        return CHANNEL_LABELS.get(value, 'Существующий режим (main)')
+        return CHANNEL_LABELS.get(value, t('Существующий режим (main)', 'Legacy mode (main)'))
 
     def menu_text():
         current = settings()
-        pin = current['version_pin'] or 'не закреплена'
-        mode = AUTO_LABELS[current['auto_mode']]
-        return ('🔄 **Обновления Nook**\n\n'
-                f"Текущая версия: `{local_version()}`\n"
-                f"Канал: **{channel_name(current['channel'])}**\n"
-                f"Закреплённая версия: `{pin}`\n"
-                f"Автообновления: **{mode}**\n"
-                f"Проверка обновлений: **{'приостановлена' if current['paused'] else 'включена'}**\n\n"
-                'Существующий режим обновления остаётся без изменений, пока владелец не выберет канал.')
+        pin = current['version_pin'] or t('не закреплена', 'none')
+        mode = t(*AUTO_LABELS[current['auto_mode']])
+        status = t('приостановлена', 'paused') if current['paused'] else t('включена', 'enabled')
+        return t(
+            '🔄 **Обновления Nook**\n\n'
+            'Текущая версия: `{version}`\nКанал: **{channel}**\n'
+            'Закреплённая версия: `{pin}`\nАвтообновления: **{mode}**\n'
+            'Проверка обновлений: **{status}**\n\n'
+            'Существующий режим обновления остаётся без изменений, пока владелец не выберет канал.',
+            '🔄 **Nook updates**\n\n'
+            'Current version: `{version}`\nChannel: **{channel}**\n'
+            'Pinned version: `{pin}`\nAutomatic updates: **{mode}**\n'
+            'Update checks: **{status}**\n\n'
+            'The existing update mode remains active until the owner chooses a channel.',
+        ).format(version=local_version(), channel=channel_name(current['channel']),
+                 pin=pin, mode=mode, status=status)
 
     def channel_buttons():
         return [[m.btn(CHANNEL_LABELS[channel], 'choose-channel', channel)]
@@ -49,20 +60,22 @@ def setup(m):
 
     async def show_menu(ctx):
         current = settings()
+        pause = (t('Возобновить проверки', 'Resume checks') if current['paused']
+                 else t('Приостановить проверки', 'Pause checks'))
         controls = channel_buttons()
         controls.extend([
-            [m.btn('Проверить обновления', 'check-release')],
-            [m.btn('Выбрать версию / закрепить', 'list-releases')],
-            [m.btn('История изменений', 'changelog')],
-            [m.btn('Снять закрепление', 'unpin')],
-            [m.btn('Автообновления', 'auto-menu')],
-            [m.btn('Приостановить проверки' if not current['paused'] else 'Возобновить проверки', 'toggle-pause')],
-            [m.btn('Создать и проверить резервную копию', 'backup')],
-            [m.btn('Как откатиться', 'rollback-help')],
+            [m.btn(t('Проверить обновления', 'Check for updates'), 'check-release')],
+            [m.btn(t('Выбрать версию / закрепить', 'Choose or pin a version'), 'list-releases')],
+            [m.btn(t('История изменений', 'Release notes'), 'changelog')],
+            [m.btn(t('Снять закрепление', 'Unpin version'), 'unpin')],
+            [m.btn(t('Автообновления', 'Automatic updates'), 'auto-menu')],
+            [m.btn(pause, 'toggle-pause')],
+            [m.btn(t('Создать и проверить резервную копию', 'Create and verify backup'), 'backup')],
+            [m.btn(t('Как откатиться', 'Rollback instructions'), 'rollback-help')],
         ])
         await ctx.reply(menu_text(), controls)
 
-    @m.button('Обновления и резервные копии', icon='refresh', where='mods')
+    @m.button('Обновления и резервные копии', icon='refresh', where='mods', english='Updates and backups')
     async def open_menu(ctx):
         await show_menu(ctx)
 
@@ -73,9 +86,11 @@ def setup(m):
     @m.command('version', 'показать версию и канал Nook')
     async def version_command(ctx):
         current = settings()
-        await ctx.reply(f"Текущая версия: `{local_version()}`\n"
-                        f"Канал: **{channel_name(current['channel'])}**\n"
-                        f"Закреплено: `{current['version_pin'] or 'нет'}`")
+        await ctx.reply(t(
+            'Текущая версия: `{version}`\nКанал: **{channel}**\nЗакреплено: `{pin}`',
+            'Current version: `{version}`\nChannel: **{channel}**\nPinned version: `{pin}`',
+        ).format(version=local_version(), channel=channel_name(current['channel']),
+                 pin=current['version_pin'] or t('нет', 'none')))
 
     @m.command('releases', 'список версий для выбранного канала')
     async def releases_command(ctx):
@@ -84,18 +99,18 @@ def setup(m):
     async def list_release_choices(ctx):
         current = settings()
         if current['channel'] is None:
-            return await ctx.reply('Сначала выбери канал обновлений. До этого сохраняется прежний режим.')
+            return await ctx.reply(t('Сначала выбери канал обновлений. До этого сохраняется прежний режим.', 'Choose an update channel first. The existing mode remains active until then.'))
         try:
             releases = await asyncio.to_thread(nook_update.list_releases)
             choices = eligible_releases(installable_releases(releases), current['channel'])[:8]
         except Exception as exc:
             m.log.warning('Release listing failed: %s', type(exc).__name__)
-            return await ctx.reply('Не удалось получить релизы GitHub. Настройки не изменены.')
+            return await ctx.reply(t('Не удалось получить релизы GitHub. Настройки не изменены.', 'Could not fetch GitHub releases. Settings are unchanged.'))
         if not choices:
-            return await ctx.reply('Для выбранного канала пока нет опубликованных версий.')
+            return await ctx.reply(t('Для выбранного канала пока нет опубликованных версий.', 'This channel has no published releases yet.'))
         buttons = [[m.btn(f"{item['version']} · {CHANNEL_LABELS[item['channel']]}",
                           'pin-version', item['version'])] for item in choices]
-        await ctx.reply('Выбери версию для закрепления. Это не устанавливает её автоматически:',
+        await ctx.reply(t('Выбери версию для закрепления. Это не устанавливает её автоматически:', 'Choose a version to pin for future update checks.'),
                         buttons)
 
     @m.command('changelog', 'показать изменения опубликованных релизов')
@@ -110,12 +125,12 @@ def setup(m):
             latest = eligible_releases(releases, channel)[:5]
         except Exception as exc:
             m.log.warning('Changelog fetch failed: %s', type(exc).__name__)
-            return await ctx.reply('Не удалось получить историю релизов GitHub.')
+            return await ctx.reply(t('Не удалось получить историю релизов GitHub.', 'Could not fetch GitHub release notes.'))
         if not latest:
-            return await ctx.reply('Опубликованных изменений пока нет.')
+            return await ctx.reply(t('Опубликованных изменений пока нет.', 'No release notes have been published yet.'))
         lines = []
         for item in latest:
-            body = str(item.get('body') or 'Описание релиза не заполнено.')
+            body = str(item.get('body') or t('Описание релиза не заполнено.', 'No release description was provided.'))
             body = re.sub(r'([\\_*`\[\]])', r'\\\1', body[:1800])
             lines.append(f"**{item['version']} · {CHANNEL_LABELS[item['channel']]}**\n{body}")
         await ctx.reply('\n\n'.join(lines))
@@ -124,25 +139,27 @@ def setup(m):
     async def choose_channel(ctx):
         selected = ctx.arg
         if selected not in CHANNEL_LABELS:
-            return await ctx.reply('Неизвестный канал.')
+            return await ctx.reply(t('Неизвестный канал.', 'Unknown channel.'))
         current = settings()
-        warning = ('⚠️ Это экспериментальный канал: возможны ошибки и несовместимость. '
-                   'Текущие файлы пользователя не заменяются при конфликте.')
-        text = f"Выбрать **{CHANNEL_LABELS[selected]}**?"
+        warning = (t('⚠️ Это экспериментальный канал: возможны ошибки и несовместимость. '
+                   'Текущие файлы пользователя не заменяются при конфликте.', '⚠️ Experimental releases may have bugs or compatibility issues. Conflicts stop the update and preserve user files.'))
+        text = t("Выбрать **{}**?", "Choose **{}**?").format(CHANNEL_LABELS[selected])
         if selected != 'stable' and (current['channel'] is None or
                                      ('stable', 'rc', 'beta', 'alpha', 'nightly').index(selected) >
                                      ('stable', 'rc', 'beta', 'alpha', 'nightly').index(current['channel'])):
             text = warning + '\n\n' + text
-        await ctx.reply(text, [[m.btn('Подтвердить канал', 'set-channel', selected)],
-                               [m.btn('Отмена', 'back-menu')]])
+        await ctx.reply(text, [[m.btn(t('Подтвердить канал', 'Confirm channel'), 'set-channel', selected)],
+                               [m.btn(t('Отмена', 'Cancel'), 'back-menu')]])
 
     @m.callback('set-channel')
     async def set_channel(ctx):
         try:
             current = await asyncio.to_thread(nook_update.save_update_settings, home,
                                               channel=ctx.arg)
-            await ctx.edit('Канал сохранён: **' + channel_name(current['channel']) +
-                           '**. Установка появится только после отдельного подтверждения.')
+            await ctx.edit(t(
+                'Канал сохранён: **{}**. Установка появится только после отдельного подтверждения.',
+                'Channel saved: **{}**. Choose an update to confirm installation.',
+            ).format(channel_name(current['channel'])))
         except nook_update.UpdateError as exc:
             await ctx.reply(str(exc))
 
@@ -159,10 +176,14 @@ def setup(m):
         try:
             current = await asyncio.to_thread(nook_update.save_update_settings, home,
                                               version_pin=ctx.arg)
-            await ctx.edit('Закреплена версия `' + current['version_pin'] +
-                           '`. Для установки сначала проверь обновление и подтверди действие.',
-                           [[m.btn('Проверить закреплённую версию', 'check-release')],
-                            [m.btn('Меню обновлений', 'back-menu')]])
+            text = t(
+                'Закреплена версия `{}`. Для установки сначала проверь обновление и подтверди действие.',
+                'Pinned version `{}`. Check for updates and confirm to install it.',
+            ).format(current['version_pin'])
+            await ctx.edit(text, [
+                [m.btn(t('Проверить закреплённую версию', 'Check the pinned version'), 'check-release')],
+                [m.btn(t('Меню обновлений', 'Update menu'), 'back-menu')],
+            ])
         except nook_update.UpdateError as exc:
             await ctx.reply(str(exc))
 
@@ -170,41 +191,50 @@ def setup(m):
     async def unpin(ctx):
         current = await asyncio.to_thread(nook_update.save_update_settings, home,
                                           clear_version_pin=True)
-        await ctx.edit('Закрепление снято. Выбор версии будет следовать каналу **'
-                       + channel_name(current['channel']) + '**.')
+        await ctx.edit(t(
+            'Закрепление снято. Выбор версии будет следовать каналу **{}**.',
+            'Version unpinned. Update checks follow the **{}** channel.',
+        ).format(channel_name(current['channel'])))
 
     @m.callback('check-release')
     async def check_release(ctx):
         current = settings()
         if current['channel'] is None:
-            return await ctx.reply('Сначала выбери канал. Для существующей установки текущий режим сохранён.')
-        await ctx.toast('Проверяю GitHub Releases…')
+            return await ctx.reply(t('Сначала выбери канал. Для существующей установки текущий режим сохранён.', 'Choose a channel first. This installation keeps its existing update mode until then.'))
+        await ctx.toast(t('Проверяю GitHub Releases…', 'Checking GitHub Releases…'))
         try:
             plan = await asyncio.to_thread(nook_update.prepare, home, current['version_pin'])
             if not plan['changes']:
-                return await ctx.reply('✅ Доступных изменений для этой версии нет.')
+                return await ctx.reply(t('✅ Доступных изменений для этой версии нет.', '✅ No changes available for this version.'))
             release_name = plan.get('release_name') or plan.get('version') or plan['revision'][:10]
             body = str(plan.get('release_body') or '').strip()
             body = re.sub(r'([\\_*`\[\]])', r'\\\1', body[:1200])
-            text = (f"**Обновление Nook · {release_name}**\n"
-                    f"Версия: `{plan.get('version', 'неизвестна')}`\n"
-                    f"Канал: {channel_name(plan.get('channel', current['channel']))}\n"
-                    f"Файлов программы: {len(plan['changes'])}\n"
-                    'Местные конфликты отменяют обновление; runtime-данные не заменяются.')
+            text = t(
+                '**Обновление Nook · {release}**\nВерсия: `{version}`\n'
+                'Канал: {channel}\nФайлов программы: {files}\n'
+                'Местные конфликты отменяют обновление; runtime-данные не заменяются.',
+                '**Nook update · {release}**\nVersion: `{version}`\n'
+                'Channel: {channel}\nProgram files: {files}\n'
+                'Local conflicts stop the update and preserve runtime data.',
+            ).format(release=release_name, version=plan.get('version', t('неизвестна', 'unknown')),
+                     channel=channel_name(plan.get('channel', current['channel'])), files=len(plan['changes']))
             if plan.get('environment_manifest'):
-                text += '\nБудут подготовлены новое окружение и полная локальная резервная копия.'
+                text += t('\nБудут подготовлены новое окружение и полная локальная резервная копия.', '\nNook will prepare a new environment and a full local backup.')
             if body:
                 text += '\n\n' + body
             action = 'install-update'
-            label = 'Установить с резервной копией'
+            label = t('Установить с резервной копией', 'Install with backup')
             if plan.get('downgrade'):
-                text += (f"\n\n⚠️ Это downgrade: `{plan['current_version']}` → "
-                         f"`{plan['version']}`. Возможна несовместимость данных. "
-                         'Сначала создай и проверь резервную копию.')
+                text += t(
+                    '\n\n⚠️ Это downgrade: `{current}` → `{target}`. Возможна несовместимость данных. '
+                    'Сначала создай и проверь резервную копию.',
+                    '\n\n⚠️ Downgrade from `{current}` to `{target}`. Data may be incompatible. '
+                    'Create and verify a backup first.',
+                ).format(current=plan['current_version'], target=plan['version'])
                 action = 'confirm-downgrade'
-                label = 'Я понимаю риск downgrade'
+                label = t('Я понимаю риск downgrade', 'I understand the downgrade risk')
             await ctx.reply(text, [[m.btn(label, action, plan['id'])],
-                                   [m.btn('Отмена', 'back-menu')]])
+                                   [m.btn(t('Отмена', 'Cancel'), 'back-menu')]])
         except nook_update.UpdateError as exc:
             await ctx.reply(str(exc))
 
@@ -220,26 +250,33 @@ def setup(m):
         try:
             await asyncio.to_thread(nook_update.service_matches, home, os.getpid())
             queued = await asyncio.to_thread(nook_update.request, home, ctx.arg, allow_downgrade=allow_downgrade)
-            await ctx.edit('Обновление поставлено в очередь. Оно начнётся после завершения активных задач; '
-                           'независимый updater проверит запуск и откатит изменения при ошибке.'
-                           if queued else 'Изменений нет.')
+            text = t(
+                'Обновление поставлено в очередь. Оно начнётся после завершения активных задач; '
+                'независимый updater проверит запуск и откатит изменения при ошибке.',
+                'Update queued. After active tasks finish, the updater will check startup and roll back if it fails.',
+            ) if queued else t('Изменений нет.', 'No changes.')
+            await ctx.edit(text)
         except nook_update.UpdateError as exc:
             await ctx.reply(str(exc))
 
     @m.callback('auto-menu')
     async def auto_menu(ctx):
         current = settings()
-        rows = [[m.btn(label, 'set-auto', mode)] for mode, label in AUTO_LABELS.items()]
-        await ctx.reply('Проверка выполняется раз в 12 часов. Автоустановка ждёт завершения задач и '
-                        'проверяет запуск. Для перехода на старую версию нужно отдельное подтверждение.\n'
-                        'Текущий режим: **' + AUTO_LABELS[current['auto_mode']] + '**', rows)
+        rows = [[m.btn(t(*labels), 'set-auto', mode)] for mode, labels in AUTO_LABELS.items()]
+        await ctx.reply(t(
+            'Проверка выполняется раз в 12 часов. Автоустановка ждёт завершения задач и '
+            'проверяет запуск. Для перехода на старую версию нужно отдельное подтверждение.\n'
+            'Текущий режим: **{}**',
+            'Nook checks every 12 hours. Automatic installation waits for tasks to finish and verifies startup. '
+            'Downgrades require separate approval.\nCurrent mode: **{}**',
+        ).format(t(*AUTO_LABELS[current['auto_mode']])), rows)
 
     @m.callback('set-auto')
     async def set_auto(ctx):
         try:
             current = await asyncio.to_thread(nook_update.save_update_settings, home,
                                               auto_mode=ctx.arg)
-            await ctx.edit('Режим автообновлений: **' + AUTO_LABELS[current['auto_mode']] + '**.')
+            await ctx.edit(t('Режим автообновлений: **', 'Automatic updates: **') + t(*AUTO_LABELS[current['auto_mode']]) + '**.')
         except nook_update.UpdateError as exc:
             await ctx.reply(str(exc))
 
@@ -248,20 +285,20 @@ def setup(m):
         current = settings()
         await asyncio.to_thread(nook_update.save_update_settings, home,
                                 paused=not current['paused'])
-        await ctx.edit('Проверка обновлений ' +
-                       ('приостановлена.' if not current['paused'] else 'возобновлена.'))
+        await ctx.edit(t('Проверка обновлений ', 'Update checks ') +
+                       (t('приостановлена.', 'paused.') if not current['paused'] else t('возобновлена.', 'resumed.')))
 
     @m.command('backup', 'создать и проверить локальную резервную копию')
     async def backup_command(ctx):
         lanes = getattr(m.core, 'maintenance_lanes', ())
         if not lanes or any(lane.current or lane.waiting or lane.lock.locked() for lane in lanes):
-            return await ctx.reply('Дождись завершения задач Nook и повтори создание резервной копии.')
+            return await ctx.reply(t('Дождись завершения задач Nook и повтори создание резервной копии.', 'Wait for Nook tasks to finish and try creating the backup again.'))
         # Reserve both agent lanes before yielding to queued agent work.
         for lane in lanes:
             await lane.lock.acquire()
         m.core.backup_active = True
         try:
-            await ctx.toast('Создаю и проверяю резервную копию…')
+            await ctx.toast(t('Создаю и проверяю резервную копию…', 'Creating and verifying a backup…'))
             task = asyncio.create_task(asyncio.to_thread(backup_manager.create_backup, home, online=True))
             try:
                 path = await asyncio.shield(task)
@@ -269,11 +306,16 @@ def setup(m):
                 await asyncio.gather(task, return_exceptions=True)
                 raise
             report = await asyncio.to_thread(backup_manager.verify_backup, path)
-            await ctx.reply(f"✅ Проверено: {report['files']} файлов, {report['bytes']} байт.\n"
-                            f"Архив с секретами хранится локально в `{path.relative_to(home)}`. "
-                            'Защити его правами каталога и независимой копией.')
+            await ctx.reply(t(
+                '✅ Проверено: {files} файлов, {size} байт.\n'
+                'Архив с секретами хранится локально в `{path}`. '
+                'Защити его правами каталога и независимой копией.',
+                '✅ Verified {files} files, {size} bytes.\n'
+                'The local archive at `{path}` contains secrets. Keep it in a restricted directory '
+                'and maintain a separate backup copy.',
+            ).format(files=report['files'], size=report['bytes'], path=path.relative_to(home)))
         except backup_manager.BackupError as exc:
-            await ctx.reply('Резервная копия не создана: ' + str(exc))
+            await ctx.reply(t('Резервная копия не создана: ', 'Could not create the backup: ') + str(exc))
         finally:
             m.core.backup_active = False
             for lane in reversed(lanes):
@@ -292,12 +334,16 @@ def setup(m):
         await show_rollback(ctx)
 
     async def show_rollback(ctx):
-        await ctx.reply('Откат кода выполняется только при остановленной службе и не заменяет личные данные. '
-                        'Для установок с `nook.service`:\n\n'
-                        '`systemctl --user stop nook.service`\n'
-                        '`bin/nook-update rollback-offline --yes`\n'
-                        '`systemctl --user start nook.service`\n\n'
-                        'Откат откажется перезаписывать изменения, сделанные после обновления.')
+        await ctx.reply(
+            t('Откат кода выполняется только при остановленной службе и не заменяет личные данные. '
+              'Для установок с `nook.service`:\n\n',
+              'Stop the service before rolling back the code. Rollback preserves personal data. '
+              'For installations using `nook.service`:\n\n')
+            + '`systemctl --user stop nook.service`\n'
+              '`bin/nook-update rollback-offline --yes`\n'
+              '`systemctl --user start nook.service`\n\n'
+            + t('Откат откажется перезаписывать изменения, сделанные после обновления.',
+                'Rollback preserves new local changes and stops if those changes conflict.'))
 
     @m.every(CHECK_INTERVAL)
     async def scheduled_check():
@@ -314,20 +360,22 @@ def setup(m):
             m.save()
             if not plan['changes']:
                 return
-            text = (f"Доступен Nook `{plan.get('version', 'unknown')}` "
-                    f"({channel_name(plan.get('channel', current['channel']))}), "
-                    f"изменено файлов: {len(plan['changes'])}.")
-            buttons = [[m.btn('Проверить / установить', 'check-release')]]
+            text = t(
+                'Доступен Nook `{version}` ({channel}), изменено файлов: {files}.',
+                'Nook `{version}` is available ({channel}), with {files} changed files.',
+            ).format(version=plan.get('version', 'unknown'),
+                     channel=channel_name(plan.get('channel', current['channel'])), files=len(plan['changes']))
+            buttons = [[m.btn(t('Проверить / установить', 'Review or install'), 'check-release')]]
             if current['auto_mode'] == 'confirm' and not plan.get('downgrade'):
-                buttons = [[m.btn('Установить с проверкой', 'install-update', plan['id'])]]
+                buttons = [[m.btn(t('Установить с проверкой', 'Install and verify'), 'install-update', plan['id'])]]
             if plan.get('downgrade'):
-                text += ' Это downgrade; требуется ручная проверка и отдельное подтверждение.'
+                text += t(' Это downgrade; требуется ручная проверка и отдельное подтверждение.', ' Downgrades require manual review and separate confirmation.')
             elif current['auto_mode'] == 'install' and m.state.get('last_auto_revision') != plan['revision']:
                 await asyncio.to_thread(nook_update.service_matches, home, os.getpid())
                 if await asyncio.to_thread(nook_update.request, home, plan['id']):
                     m.state['last_auto_revision'] = plan['revision']
                     m.save()
-                    return await m.send(text + ' Установка поставлена в очередь.')
+                    return await m.send(text + t(' Установка поставлена в очередь.', ' Installation queued.'))
             await m.send(text, buttons)
         except nook_update.UpdateError as exc:
             m.log.warning('Scheduled update check refused: %s', exc)

@@ -263,6 +263,55 @@ else:
         self.assertIn('нет опубликованных версий', str(self.runtime['REG'].core.send.call_args))
         self.assertFalse((self.home / 'spool/updates/request.json').exists())
 
+    async def test_owner_switches_language_without_changing_update_settings(self):
+        runtime = self.runtime
+        runtime['post'] = AsyncMock(return_value=60)
+        runtime['delete_msgs'] = AsyncMock()
+        runtime['model_quota_status'] = AsyncMock(return_value=('', ''))
+        registry = runtime['REG']
+
+        for sender, chat, kind in ((8, 8, 'private'), (7, 8, 'private'), (7, -1007, 'group')):
+            await self.dispatch('custom:language:en', sender, chat, kind)
+        self.assertNotIn('ui_language', runtime['STATE'])
+
+        await self.dispatch('custom:language:en')
+        saved = read_json(Path(runtime['STATE_PATH']))
+        self.assertEqual(saved['ui_language'], 'en')
+        self.assertIn('Interface settings', runtime['post'].await_args.args[1])
+        for view, next_button in (('menu', 'More'), ('more', 'Mods'), ('mods', 'Updates and backups')):
+            await self.dispatch(view)
+            markup = runtime['post'].await_args.args[2]
+            self.assertTrue(any(next_button in button.text
+                                for row in markup.inline_keyboard for button in row))
+        await self.dispatch('mod:update_manager:open_menu')
+        self.assertIn('Legacy mode (main)', registry.core.send.await_args.args[1])
+        self.assertIn('Check for updates', str(registry.core.send.await_args.kwargs['markup']))
+        self.assertIsNone(update_settings(self.home)['channel'])
+        self.assertEqual(update_settings(self.home)['auto_mode'], 'off')
+
+        from test_codex_pool import fake_accounts, limits
+        pool = registry.mods["codex_pool"].pool
+        runtime['CFG']['model'] = 'gpt-6.1-sol'
+        pool.root = self.home / ".codex"
+        fake_accounts(pool.root)
+        account = pool.accounts()[0]
+        pool.read_limits = AsyncMock(return_value=limits("primary", 96))
+        await self.dispatch("mod:codex_pool:strategy:least")
+        self.assertIn("Least quota remaining first", registry.core.edit.await_args.args[2])
+        self.assertEqual(pool.settings["strategy"], "least")
+        await self.dispatch(f"mod:codex_pool:account:{account.ident}")
+        self.assertIn("Week · 4% remaining", registry.core.edit.await_args.args[2])
+        await self.dispatch(f"mod:codex_pool:cap:{account.ident},95")
+        self.assertEqual(pool.settings["caps"][account.ident], 95)
+        self.assertEqual(registry.core.edit.await_args.args[2], "Budget saved.")
+
+        await self.dispatch('custom:preset:minimal')
+        self.assertEqual(read_json(Path(runtime['STATE_PATH']))['ui_language'], 'en')
+        await self.dispatch('custom:language:ru')
+        self.assertEqual(read_json(Path(runtime['STATE_PATH']))['ui_language'], 'ru')
+        await self.dispatch('mod:update_manager:open_menu')
+        self.assertIn('Существующий режим (main)', registry.core.send.await_args.args[1])
+
     async def test_foreign_and_group_callbacks_cannot_change_channel(self):
         for sender, chat, kind in ((8, 8, 'private'), (7, 8, 'private'), (7, -1007, 'group')):
             await self.dispatch('mod:update_manager:set-channel:nightly', sender, chat, kind)

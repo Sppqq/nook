@@ -1,5 +1,15 @@
 # Modernization log
 
+## Iteration 14 — localize the Telegram update path
+
+- Add an owner-only language switch that preserves existing preferences and
+  defaults to Russian for old installations. Translate the main menu, interface
+  settings, update screens, scheduled release notifications, and the
+  Codex pool's account controls and reset notifications.
+- Test persistence, private owner authorization, and the unchanged separate
+  downgrade confirmation. Installer, core diagnostics, and mod coverage remain
+  incomplete.
+
 ## Iteration 13 — prepare the next Nightly candidate
 
 - Exercise the real bot entry point with a pending environment update. It

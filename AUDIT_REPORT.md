@@ -20,6 +20,15 @@ GitHub reports required Python 3.11 and 3.12 checks for `main`. The
 account could not verify a `release-stable` environment or tag protections.
 Verify these settings with repository-admin access before promotion.
 
+## Telegram language preference
+
+An aiogram dispatch test rejects language changes from non-owner or group
+callbacks, verifies persistence through layout presets, and checks that
+changing the language leaves legacy update mode and automatic update settings
+unchanged. Release approvals and downgrade callbacks use the same identifiers
+in both languages. The dispatcher exercises English pool strategy selection,
+quota details and the existing account budget callbacks.
+
 ## Current Codex pool audit
 
 - Pool recovery distinguishes an unavailable quota sample from a confirmed

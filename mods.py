@@ -14,6 +14,8 @@ import sys
 import time
 import traceback
 
+from ui_settings import translate
+
 HOME = os.path.dirname(os.path.abspath(__file__))
 MODS_DIR = os.path.join(HOME, "mods")
 SPOOL = os.path.join(HOME, "spool", "mods")
@@ -83,6 +85,7 @@ class Mod:
         self.doc = ""
         self.commands = {}     # cmd -> (описание, fn)
         self.buttons = []      # (текст, key, icon, where)
+        self.button_english = {}
         self.callbacks = {}    # key -> fn
         self.periodic = []     # (секунды, fn)
         self.text_hooks = []   # (regex, fn)
@@ -113,11 +116,19 @@ class Mod:
             await self.agent(prompt.replace("{args}", ctx.args or ""))
         self.command(name, desc)(run)
 
-    def button(self, text, icon=None, where="mods", key=None):
+    def text(self, russian, english):
+        return translate(getattr(self.core, "state", {}), russian, english)
+
+    def button_label(self, key, label):
+        return self.text(label, self.button_english.get(key, label))
+
+    def button(self, text, icon=None, where="mods", key=None, *, english=None):
         """@m.button("Погода", icon="cal", where="menu"|"mods") — кнопка в главном меню или на экране «Моды»."""
         def deco(fn):
             k = key or fn.__name__
             self.buttons.append((text, k, icon, where))
+            if english is not None:
+                self.button_english[k] = english
             self.callbacks[k] = fn
             return fn
         return deco
@@ -302,7 +313,8 @@ class Registry:
         return [(c, d) for m in self.mods.values() for c, (d, _) in m.commands.items()]
 
     def buttons(self, where):
-        return [(m, text, key, icon) for m in self.mods.values() for text, key, icon, w in m.buttons if w == where]
+        return [(m, m.button_label(key, text), key, icon)
+                for m in self.mods.values() for text, key, icon, w in m.buttons if w == where]
 
     async def on_text(self, msg, text):
         for m in self.mods.values():
