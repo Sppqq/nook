@@ -1,7 +1,9 @@
 """Account changes use fake credentials and never touch the real Codex login."""
 import asyncio
 import importlib.util
+import os
 from pathlib import Path
+import signal
 from types import SimpleNamespace
 import tempfile
 import unittest
@@ -102,23 +104,42 @@ class AccountTests(unittest.IsolatedAsyncioTestCase):
         helper = self.home / 'codex-auth'
         helper.write_text(
             '#!/bin/sh\ncd "$(dirname "$0")" || exit 1\n'
-            '(sleep 1; touch late-write) &\ntouch ready\nwait\n'
+            'sleep 3600 &\nprintf "%s %s\\n" "$$" "$!" > ready.tmp\n'
+            'mv ready.tmp ready\nwait\n'
         )
         helper.chmod(0o700)
+        group = None
         with patch.object(self.mod.shutil, 'which', return_value=str(helper)):
             task = asyncio.create_task(self.real_cli('switch'))
             try:
                 async with asyncio.timeout(3):
                     while not (self.home / 'ready').exists():
                         await asyncio.sleep(0.01)
+                group, child = map(int, (self.home / 'ready').read_text().split())
                 task.cancel()
                 with self.assertRaises(asyncio.CancelledError):
-                    await task
+                    await asyncio.wait_for(asyncio.shield(task), 3)
+                child_status = Path(f'/proc/{child}/status')
+                async with asyncio.timeout(3):
+                    while True:
+                        try:
+                            status = child_status.read_text()
+                        except (FileNotFoundError, ProcessLookupError):
+                            break
+                        if any(line.split()[1] == 'Z' for line in status.splitlines()
+                               if line.startswith('State:')):
+                            break
+                        await asyncio.sleep(0.01)
+                group = None
             finally:
+                if group is not None:
+                    try:
+                        os.killpg(group, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
                 if not task.done():
                     task.cancel()
                     await asyncio.gather(task, return_exceptions=True)
-        self.assertFalse((self.home / 'late-write').exists())
 
     async def test_busy_blocks_login_and_switch(self):
         self.core['bg_lane'].current=object()
