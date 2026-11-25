@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 from aiogram.types import CallbackQuery, Update
 
-from nook_update import update_settings
+from nook_update import STATE as INSTALL_STATE, json_write, read_json, update_settings, workspace
 import job_scheduler
 from local_extensions import Store
 
@@ -59,6 +59,61 @@ class TelegramDispatchTests(unittest.IsolatedAsyncioTestCase):
         })
         with patch.object(CallbackQuery, 'answer', new_callable=AsyncMock):
             await self.runtime['dp'].feed_update(self.runtime['bot'], update)
+
+    async def test_dependency_update_reports_health_before_polling_or_background_work(self):
+        runtime = self.runtime
+        base = workspace(self.home)
+        journal = base / 'transaction.json'
+        transaction = {'status': 'awaiting_health', 'environment': {'old': [1, 2], 'new': [1, 3]}}
+        json_write(journal, transaction)
+        json_write(self.home / INSTALL_STATE, {'revision': 'candidate'})
+        runtime['mods_reload'] = AsyncMock()
+        runtime['set_commands'] = AsyncMock()
+        runtime['STATE']['introduced'] = True
+        jobs = {name: AsyncMock() for name in (
+            'trash_loop', 'watch_loop', 'outbox_loop', 'jobs_loop', 'patrol_loop',
+            'guard_loop', 'whisper_unload_loop', 'mods_loop', 'resume_loop', 'ops_loop',
+        )}
+        runtime.update(jobs)
+
+        async def release_after_heartbeat(delay):
+            self.assertEqual(delay, 2)
+            health = read_json(base / 'health.json')
+            self.assertEqual((health['revision'], health['pid']), ('candidate', os.getpid()))
+            start_tasks.assert_not_called()
+            polling.assert_not_awaited()
+            runtime['set_commands'].assert_not_awaited()
+            for job in jobs.values():
+                job.assert_not_called()
+            json_write(journal, dict(transaction, status='success'))
+
+        with (patch.object(runtime['bot'], 'get_me', new_callable=AsyncMock) as get_me,
+              patch.object(runtime['dp'], 'start_polling', new_callable=AsyncMock) as polling,
+              patch.object(runtime['REG'], 'start_tasks') as start_tasks,
+              patch.object(asyncio, 'sleep', side_effect=release_after_heartbeat)):
+            await runtime['main']()
+        runtime['mods_reload'].assert_awaited_once_with(start_tasks=False)
+        get_me.assert_awaited_once()
+        start_tasks.assert_called_once()
+        runtime['set_commands'].assert_awaited_once()
+        polling.assert_awaited_once_with(runtime['bot'])
+        for job in jobs.values():
+            job.assert_called_once()
+
+    async def test_candidate_without_telegram_health_never_claims_work(self):
+        runtime = self.runtime
+        base = workspace(self.home)
+        json_write(base / 'transaction.json', {'status': 'awaiting_health', 'environment': {}})
+        runtime['mods_reload'] = AsyncMock()
+        with (patch.object(runtime['bot'], 'get_me', side_effect=RuntimeError('Telegram unavailable')),
+              patch.object(runtime['dp'], 'start_polling', new_callable=AsyncMock) as polling,
+              patch.object(runtime['REG'], 'start_tasks') as start_tasks):
+            with self.assertRaisesRegex(RuntimeError, 'Telegram unavailable'):
+                await runtime['main']()
+        runtime['mods_reload'].assert_awaited_once_with(start_tasks=False)
+        self.assertFalse((base / 'health.json').exists())
+        start_tasks.assert_not_called()
+        polling.assert_not_awaited()
 
     async def test_owner_pool_strategy_and_cli_resume_after_quota(self):
         from test_codex_pool import fake_accounts

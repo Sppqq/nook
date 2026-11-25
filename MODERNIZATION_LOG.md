@@ -1,5 +1,14 @@
 # Modernization log
 
+## Iteration 13 — prepare the next Nightly candidate
+
+- Exercise the real bot entry point with a pending environment update. It
+  records candidate health after Telegram responds and waits for supervisor
+  approval before polling or scheduling work. A Telegram startup failure
+  leaves the candidate unapproved and starts no work.
+- Assign a distinct Nightly version and render release notes that describe
+  signed dependency upgrades. The published Alpha remains available.
+
 ## Iteration 12 — switch dependencies in a signed update
 
 - Prepare and validate a separate Python environment before stopping the

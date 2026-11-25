@@ -25,6 +25,14 @@ class ReleaseNotesTests(unittest.TestCase):
         self.assertIn('## Compatibility and migration', text)
         self.assertIn('## Rollback', text)
         self.assertIn('provenance.jsonl', text)
+        self.assertIn('The updater refuses dependency changes.', text)
+
+    def test_current_candidate_has_versioned_notes_and_environment_compatibility(self):
+        version = (ROOT / 'VERSION').read_text().strip()
+        text = NOTES.render('v' + version)
+        self.assertIn('## Changes', text)
+        self.assertIn('changed Python dependencies for compatible signed upgrades', text)
+        self.assertIn('restore the previous source and environment', text)
 
     def test_tag_and_version_must_match(self):
         with self.assertRaisesRegex(ValueError, 'start with v'):

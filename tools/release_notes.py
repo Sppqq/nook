@@ -37,16 +37,21 @@ def render(tag):
         raise ValueError('Release manifest does not match VERSION/update_api.')
     changes = changelog_entry(version)
     prerelease = channel != 'stable'
+    compatibility = (
+        'Managed installations can stage changed Python dependencies for compatible signed upgrades. '
+        'The updater verifies a local snapshot and can restore the previous source and environment. '
+        if manifest.get('environment_update') == 1 else
+        'The updater refuses dependency changes. '
+    )
     return (
         f'# Nook {tag}\n\n'
         f'**Channel:** {CHANNEL_LABELS[channel]}'
         f'{" (pre-release)" if prerelease else ""}\n\n'
         '## Changes\n\n' + changes + '\n\n'
         '## Compatibility and migration\n\n'
-        f'Update protocol: `update_api {manifest["update_api"]}`. '
-        'The updater refuses dependency changes, removed source files, unsupported '
-        'update APIs and conflicting local edits. No data migration is implied by '
-        'this release note; check the changelog and upgrade guide for requirements.\n\n'
+        f'Update protocol: `update_api {manifest["update_api"]}`. ' + compatibility +
+        'The updater checks for unsupported update APIs and conflicting local edits. '
+        'See the upgrade guide for version-specific requirements and data handling.\n\n'
         '## Known limitations\n\n'
         'The managed release path requires a GitHub Actions Sigstore attestation. '
         'The legacy main-branch update path uses a pinned GitHub source snapshot. '

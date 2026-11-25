@@ -19,7 +19,9 @@
   dependency set through Telegram. The updater verifies an offline snapshot,
   waits for candidate health, and restores the old code and environment on
   failure. Run the full flow with real Telegram and Codex on a dedicated VPS.
-- An attested v0.1.2-alpha.1 is published. Beta, RC and Stable gates remain.
+- The attested `v0.1.2-alpha.1` release is published. PR #9 prepares the
+  next source bundle as `v0.1.2-nightly.20261125` for promotion to Alpha 2,
+  Beta, RC and Stable after validation.
 
 - Ported opt-in Codex routing to the public release tree. The disposable
   fixture checks the Telegram owner gate, least-quota selection and CLI

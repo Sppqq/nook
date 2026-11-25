@@ -37,6 +37,8 @@ and 61% in `legacy_migration.py`. The 90% core target remains open.
   health. The snapshot includes local installation data. External provider
   stores remain on their existing paths. Trusted module setup can still
   produce effects beyond the updater's control.
+- Bot entry-point tests verify that the candidate waits for the supervisor
+  before claiming work and produces no health signal if Telegram is unavailable.
 - `pip-audit` found no known advisories in the resolved base and voice
   requirements during the local maintainer check.
 - The exact published v0.1.1 worker has no `_recover` command. The startup

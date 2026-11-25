@@ -23,7 +23,6 @@ class ReleaseTests(unittest.TestCase):
 
     def test_canonical_version_accepts_semver_and_rejects_invalid_values(self):
         current = release.project_version(ROOT)
-        self.assertEqual(current, '0.1.2-alpha.1')
         self.assertEqual(current, json.loads((ROOT / 'MANIFEST.json').read_text())['version'])
         for value in ('1.2.3', '1.2.3-rc.1', '1.2.3-nightly.20261124'):
             with self.subTest(value=value):
