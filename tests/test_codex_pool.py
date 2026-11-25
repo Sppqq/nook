@@ -15,7 +15,8 @@ from codex_pool import Pool, quota_for, saved_accounts
 
 def fake_accounts(root):
     folder = root / "accounts"
-    folder.mkdir(parents=True)
+    folder.mkdir(mode=0o700, parents=True)
+    root.chmod(0o700)
     entries = []
     for index, name in enumerate(("primary", "reserve", "duplicate"), 1):
         entries.append({"account_key": name, "alias": name, "auth_mode": "chatgpt",
@@ -23,7 +24,9 @@ def fake_accounts(root):
         path = root / "auth.json" if index == 1 else folder / (urlsafe_b64encode(name.encode()).decode().rstrip("=") + ".auth.json")
         path.write_text(name)
         path.chmod(0o600)
-    (folder / "registry.json").write_text(json.dumps({"active_account_key": "primary", "accounts": entries}))
+    registry = folder / "registry.json"
+    registry.write_text(json.dumps({"active_account_key": "primary", "accounts": entries}))
+    registry.chmod(0o600)
 
 
 def limits(workspace, used, reset=None):
@@ -63,9 +66,10 @@ class PoolTests(unittest.IsolatedAsyncioTestCase):
     async def test_live_limit_error_resumes_same_thread_once_and_keeps_auth(self):
         runner = AsyncMock(side_effect=[("new-thread", "", "usage_limit_reached"),
                                         ("new-thread", "done", None)])
-        self.assertEqual(await self.execute(runner), ("new-thread", "done", None))
+        result = await self.pool.run(runner, "prompt", None, (), None, self.run, 2, "fixture")
+        self.assertEqual(result, ("new-thread", "done", None))
         first, second = runner.await_args_list
-        self.assertEqual((first.args[1], second.args[1]), ("initial", "new-thread"))
+        self.assertEqual((first.args[1], second.args[1]), (None, "new-thread"))
         self.assertEqual((self.root / "auth.json").read_text(), "primary")
         primary_home = Path(second.kwargs["account_env"]["CODEX_HOME"])
         reserve_home = Path(first.kwargs["account_env"]["CODEX_HOME"])
@@ -109,6 +113,46 @@ class PoolTests(unittest.IsolatedAsyncioTestCase):
         self.reserve.auth.write_text("reserve")
         self.reserve.auth.chmod(0o600)
         (self.root / "accounts/.nook-pool").symlink_to(self.root, target_is_directory=True)
+        with self.assertRaises(OSError):
+            self.pool.environment(self.reserve, {})
+
+    async def test_refresh_does_not_touch_credentials_while_turn_is_running(self):
+        entered = asyncio.Event()
+        release = asyncio.Event()
+
+        async def execute(*args, **kwargs):
+            entered.set()
+            await release.wait()
+            return "initial", "done", None
+
+        job = asyncio.create_task(self.execute(execute))
+        try:
+            await asyncio.wait_for(entered.wait(), 1)
+            self.pool.read_limits = AsyncMock()
+            await self.pool.refresh([self.reserve], "fixture", force=True)
+            self.pool.read_limits.assert_not_awaited()
+        finally:
+            release.set()
+            await job
+
+    async def test_mismatched_session_or_partial_answer_cannot_be_replayed(self):
+        for ident, final in (("other-thread", ""), ("initial", "partial answer")):
+            self.run.effects_possible = False
+            runner = AsyncMock(return_value=(ident, final, "usage_limit_reached"))
+            result = await self.execute(runner)
+            self.assertEqual(result[0], "initial")
+            self.assertTrue(self.run.effects_possible)
+            runner.assert_awaited_once()
+            self.pool.cooldowns.clear()
+
+    def test_auth_and_registry_reject_untrusted_parent_or_hardlinked_credentials(self):
+        extra = self.root / "auth-copy"
+        extra.hardlink_to(self.reserve.auth)
+        with self.assertRaises(OSError):
+            self.pool.environment(self.reserve, {})
+        extra.unlink()
+        self.reserve.auth.parent.chmod(0o775)
+        self.assertEqual(saved_accounts(self.root), [])
         with self.assertRaises(OSError):
             self.pool.environment(self.reserve, {})
 

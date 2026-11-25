@@ -34,6 +34,15 @@ resume call uses the original thread after finding an eligible account.
 
 ## Current Codex pool audit
 
+- Same-account quota sampling and turn execution are mutually exclusive
+  inside Nook. Manual credential changes wait for pool I/O. External Codex
+  commands run outside that coordination.
+- Fixtures reject unsafe registry permissions and hard-linked auth files.
+  A resumed turn cannot replace the requested thread with an unexpected
+  ID. Partial responses, malformed output and completed turns suppress
+  automated retry even when a later event reports quota exhaustion. Live
+  token refresh with real accounts remains an acceptance check.
+
 - Pool recovery distinguishes an unavailable quota sample from a confirmed
   limit. It retries unavailable samples promptly even when a different
   account has a later reset. The routing fixture checks both the provider

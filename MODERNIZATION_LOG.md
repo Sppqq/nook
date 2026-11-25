@@ -1,5 +1,17 @@
 # Modernization log
 
+## Iteration 17 — protect pooled credentials and recovery
+
+- Reserve a Codex account while reading its quota so a probe and a turn
+  cannot use the same saved login concurrently. Manual login, account switch
+  and account-list quota refresh wait for pool activity to finish.
+- Reject hard-linked credential files and registry paths writable by other
+  users. Preserve the existing Codex root and alternate-home layout.
+- Keep the requested session when the CLI reports a different thread.
+  Suppress automatic replay after partial output, malformed stream events,
+  completed turns or possible tool effects. Cover these cases through the
+  real CLI subprocess and Telegram task dispatch with fixture data.
+
 ## Iteration 16 — localize Codex quota and recovery notices
 
 - Use the owner's saved language for the Codex quota panel, low-quota footer,

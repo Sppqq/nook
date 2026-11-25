@@ -35,7 +35,7 @@ class AccountTests(unittest.IsolatedAsyncioTestCase):
         class Mod:
             def __init__(self):
                 self.handlers={};self.tasks=[]
-                self.core=SimpleNamespace(codex_login=test.core['login'],state={'main_thread':'merc-keep','fallback_until':100})
+                self.core=SimpleNamespace(codex_login=test.core['login'],codex_pool_runtime=SimpleNamespace(busy=set()),state={'main_thread':'merc-keep','fallback_until':100})
             def button(self,*a,**kw):return self.callback('switch')
             def callback(self,key):
                 def register(fn):self.handlers[key]=fn;return fn
@@ -67,6 +67,13 @@ class AccountTests(unittest.IsolatedAsyncioTestCase):
         await self.m.handlers['login'](self.ctx)
         self.assertEqual(self.calls,[])
         self.assertEqual(self.m.tasks,[])
+
+    async def test_pool_probe_blocks_manual_credential_changes(self):
+        self.m.core.codex_pool_runtime.busy.add('probe')
+        for action in ('limits', 'select', 'login'):
+            await self.m.handlers[action](self.ctx)
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.m.tasks, [])
 
     async def test_login_preserves_gemini_thread(self):
         self.m.core.state['main_thread']='agy-keep'

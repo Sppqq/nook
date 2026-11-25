@@ -676,24 +676,48 @@ async def _run_codex(prompt, thread_id=None, images=(), on_step=None, run: Run =
         async for raw in proc.stdout:
             try:
                 ev = json.loads(raw)
-            except json.JSONDecodeError:
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                run.effects_possible = True
+                continue
+            if not isinstance(ev, dict):
+                run.effects_possible = True
                 continue
             et = ev.get("type", "")
             if et == "thread.started":
-                new_thread = ev.get("thread_id") or new_thread
+                reported = ev.get("thread_id")
+                if not isinstance(reported, str) or not reported or (new_thread and reported != new_thread):
+                    run.effects_possible = True
+                    errors.append(ui_text("Codex вернул другой или некорректный сеанс.",
+                                          "Codex returned a different or invalid session."))
+                    continue
+                new_thread = reported
                 RUN_THREADS[run_id] = new_thread
             elif et in ("item.started", "item.completed"):
-                item = ev.get("item", {})
-                if item.get("type") not in {"reasoning", "agent_message", "todo_list"}:
+                item = ev.get("item")
+                if not isinstance(item, dict):
                     run.effects_possible = True
-                if et == "item.completed" and item.get("type") == "agent_message":
-                    last_msg = item.get("text", "")
+                    continue
+                kind = item.get("type")
+                if kind not in ("reasoning", "agent_message", "todo_list"):
+                    run.effects_possible = True
+                if not isinstance(kind, str):
+                    continue
+                if et == "item.completed" and kind == "agent_message":
+                    text = item.get("text")
+                    if not isinstance(text, str):
+                        run.effects_possible = True
+                        continue
+                    last_msg = text
                 if on_step:
                     line = describe_item(item, et == "item.started")
                     if line:
                         await on_step(line)
             elif et in ("error", "turn.failed"):
                 errors.append(str(ev.get("message") or ev.get("error")))
+            elif et != "turn.started":
+                # A completed turn or unrecognized event is insufficient
+                # evidence that replaying the same request is safe.
+                run.effects_possible = True
 
     async def complete():
         proc.stdin.write(prompt.encode())
@@ -730,6 +754,8 @@ async def _run_codex(prompt, thread_id=None, images=(), on_step=None, run: Run =
     if proc.returncode not in (0, None) and not final and not errors:
         errors.append(stderr.strip()[-800:] or f"codex exit {proc.returncode}")
     err = "; ".join(e for e in errors if e) or None
+    if err and final:
+        run.effects_possible = True
     if err and re.search(r"401|unauthori|log ?in|refresh.?token|expired", err + stderr[-2000:], re.I):
         err += "\n\n⚠️ Похоже, слетела авторизация Codex — нажми «Войти в Codex»"
     return new_thread, final, err
@@ -1543,7 +1569,8 @@ async def run_task(lane: Lane, prompt, *, thread_id=None, images=(), title=E("bu
         quota_error = POOL_QUOTA_ERROR if active_codex_pool() else LIMIT_RE
         if err and engine == "codex" and quota_error.search(err) and not run.cancelled and not report_success:
             if run.effects_possible:
-                err += "\nКоманда могла уже изменить состояние. Проверь результат перед повтором."
+                err += ui_text("\nКоманда могла уже изменить состояние. Проверь результат перед повтором.",
+                               "\nThe task may already have changed state. Check the result before retrying.")
             else:
                 await pause_for_limit(dict(lane=lane.name, prompt=prompt, thread=tid or thread_id, title=title,
                                            background=background, header=header, task=task, reply_to=reply_to,
@@ -2968,6 +2995,9 @@ CODEX_LOGIN_LOCK = asyncio.Lock()
 
 
 async def do_login(chat):
+    if core.codex_pool_runtime.busy:
+        return await send(chat, ui_text("Дождись завершения работы пула Codex и повтори вход.",
+                                        "Wait for the Codex pool to finish, then try signing in again."))
     if CODEX_LOGIN_LOCK.locked():
         return await send(chat, "Вход в Codex уже открыт — заверши его по предыдущей ссылке.")
     async with CODEX_LOGIN_LOCK:

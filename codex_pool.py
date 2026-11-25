@@ -53,11 +53,9 @@ class Quota:
 def saved_accounts(root):
     folder = root / "accounts"
     try:
-        if folder.is_symlink():
-            return []
+        owned_path(folder, directory=True)
         path = folder / "registry.json"
-        if path.is_symlink() or not path.is_file():
-            return []
+        owned_path(path)
         with path.open(encoding="utf-8") as stream:
             data = json.load(stream)
         entries = data.get("accounts", [])
@@ -119,12 +117,12 @@ def quota_for(result, workspace, model):
     return Quota(tuple(windows), blocked)
 
 
-def private_path(path, *, directory=False):
-    if directory:
-        path.mkdir(mode=0o700, exist_ok=True)
+def owned_path(path, *, directory=False, private=False):
     info = path.lstat()
     expected = stat.S_ISDIR if directory else stat.S_ISREG
-    if not expected(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+    forbidden = 0o077 if private else 0o022
+    if (not expected(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & forbidden
+            or (not directory and info.st_nlink != 1)):
         raise OSError("Unsafe Codex pool path")
 
 
@@ -154,14 +152,17 @@ class Pool:
     def environment(self, account, base):
         env = {key: value for key, value in base.items()
                if key not in ("CODEX_HOME", "CODEX_SQLITE_HOME", "OPENAI_API_KEY", "CODEX_API_KEY")}
-        private_path(account.auth)
+        if not account.active:
+            owned_path(account.auth.parent, directory=True)
+        owned_path(account.auth, private=True)
         if account.active:
             env.update(CODEX_HOME=str(self.root), CODEX_SQLITE_HOME=str(self.root))
             return env
         pool = self.root / "accounts" / ".nook-pool"
         home = pool / account.ident
         for folder in (pool, home):
-            private_path(folder, directory=True)
+            folder.mkdir(mode=0o700, exist_ok=True)
+            owned_path(folder, directory=True, private=True)
         links = {"auth.json": account.auth, **{name: self.root / name for name in SHARED}}
         for name, target in links.items():
             link = home / name
@@ -191,11 +192,17 @@ class Pool:
                 async with slots:
                     if self.login_lock.locked() or account.ident in self.busy:
                         return
+                    self.busy.add(account.ident)
                     try:
+                        self.cache.pop(key, None)
                         result = await self.read_limits(self.environment(account, {}))
-                        self.cache[key] = time.monotonic(), quota_for(result, account.workspace, model)
+                        if account in self.accounts() and not self.login_lock.locked():
+                            self.cache[key] = time.monotonic(), quota_for(result, account.workspace, model)
                     except (OSError, RuntimeError, ValueError, KeyError, TypeError, asyncio.TimeoutError):
                         self.cache.pop(key, None)
+                    finally:
+                        self.busy.discard(account.ident)
+                        self.changed.set()
             await asyncio.gather(*(sample(account) for account in accounts if self.cap(account)))
 
     def status(self, account, model, now):
@@ -260,7 +267,7 @@ class Pool:
                     return thread_id, last[1], "Codex usage limit: в пуле сейчас нет доступной квоты."
                 return thread_id, last[1], "Пул Codex: проверь бюджеты, авторизацию и свежесть данных."
             account, _ = max(free, key=lambda item: self.score(*item))
-            if self.login_lock.locked():
+            if self.login_lock.locked() or account not in self.accounts():
                 continue
             self.busy.add(account.ident)
             attempted.add(account.ident)
@@ -273,7 +280,11 @@ class Pool:
                     continue
                 result = await execute(prompt, thread_id, images, on_step, run,
                                        max(0.001, deadline - time.monotonic()), account_env=env)
-                thread_id, final, error = result
+                returned_id, final, error = result
+                if thread_id and returned_id and thread_id != returned_id:
+                    run.effects_possible = True
+                    return thread_id, "", "Codex returned a different session. Automatic retry was stopped."
+                thread_id = returned_id or thread_id
                 if not error or run.cancelled:
                     return result
                 if AUTH_ERROR.search(error):
@@ -283,6 +294,8 @@ class Pool:
                 else:
                     return result
                 self.cooldowns[(account.ident, model)] = time.time() + cooldown, reason
+                if final:
+                    run.effects_possible = True
                 if run.effects_possible:
                     return result
                 last = thread_id, final or last[1], error

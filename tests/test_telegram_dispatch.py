@@ -416,6 +416,10 @@ prompt = sys.stdin.read()
 print(json.dumps({'type': 'thread.started', 'thread_id': 'codex-fixture'}))
 if prompt == 'after-command':
     print(json.dumps({'type': 'item.started', 'item': {'type': 'command_execution'}}))
+elif prompt == 'malformed-stream':
+    print('{unparseable')
+elif prompt == 'completed-turn':
+    print(json.dumps({'type': 'turn.completed'}))
 print(json.dumps({'type': 'turn.failed', 'message': 'usage limit'}))
 """)
         cli.chmod(0o700)
@@ -424,9 +428,13 @@ print(json.dumps({'type': 'turn.failed', 'message': 'usage limit'}))
         self.runtime['pause_for_limit'] = AsyncMock()
         self.runtime['limits_note'] = AsyncMock(return_value='')
         self.runtime['send'] = AsyncMock(return_value=50)
-        await self.runtime['run_task'](self.runtime['user_lane'], 'after-command', show_progress=False)
-        self.runtime['pause_for_limit'].assert_not_awaited()
-        self.assertIn('могла уже изменить состояние', str(self.runtime['send'].call_args))
+        for prompt in ('after-command', 'malformed-stream', 'completed-turn'):
+            await self.runtime['run_task'](self.runtime['user_lane'], prompt, show_progress=False)
+            self.runtime['pause_for_limit'].assert_not_awaited()
+            self.assertIn('могла уже изменить состояние', str(self.runtime['send'].call_args))
+        tid, _, error = await self.runtime['_run_codex']('mismatched-thread', 'original-thread', timeout=5)
+        self.assertEqual(tid, 'original-thread')
+        self.assertIn('некорректный сеанс', error)
         await self.runtime['run_task'](self.runtime['user_lane'], 'before-command', show_progress=False)
         self.runtime['pause_for_limit'].assert_awaited_once()
 

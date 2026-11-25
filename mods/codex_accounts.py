@@ -63,8 +63,9 @@ def setup(m):
     core = m.core.codex_login.__globals__
 
     def busy():
-        return any(getattr(core.get(name), 'current', None)
-                   for name in ('user_lane', 'bg_lane'))
+        pool = m.core.codex_pool_runtime
+        return bool(pool.busy or any(getattr(core.get(name), 'current', None)
+                                     for name in ('user_lane', 'bg_lane')))
 
     async def show(ctx, *, edit=False):
         try:
@@ -90,8 +91,8 @@ def setup(m):
     @m.callback('limits')
     async def limits(ctx):
         login_lock = core['CODEX_LOGIN_LOCK']
-        if login_lock.locked():
-            return await ctx.toast('Дождись завершения входа или смены аккаунта.')
+        if login_lock.locked() or m.core.codex_pool_runtime.busy:
+            return await ctx.toast('Дождись завершения работы пула, входа или смены аккаунта.')
         async with login_lock:
             await ctx.toast('Проверяю лимиты…')
             refreshed = True

@@ -2,6 +2,11 @@
 
 ## Current work
 
+- Pool credential and retry guards cover concurrent quota probes, manual
+  account changes, malformed streams, partial replies, and mismatched
+  session IDs. Verify token refresh and fallback with disposable live
+  accounts before promotion.
+
 - The owner can switch the main Telegram menu, interface settings, release
   update screens, Codex quota and pool controls, and quota recovery notices
   between Russian and English. Complete localization of the remaining
