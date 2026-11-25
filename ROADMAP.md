@@ -10,9 +10,10 @@
 
 - The owner can switch the main Telegram menu, interface settings, release
   update screens, Codex quota and pool controls, and quota recovery notices
-  between Russian and English. Manual Codex operations and local extension
-  controls also use that preference. Complete localization of the remaining
-  Telegram views, operational notifications, and installer.
+  between Russian and English. Manual Codex operations, local extension
+  controls, server status, scheduled tasks and model settings also use
+  that preference. Complete localization of the remaining Telegram
+  views, operational notifications, and installer.
 
 - Current local line coverage is 29.4% for `bot.py`, 87.8% for the pool,
   74.7% for the updater and 62.4% for legacy migration. Focus on the queue, Telegram entry points,

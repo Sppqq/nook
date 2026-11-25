@@ -1,5 +1,13 @@
 # Modernization log
 
+## Iteration 20 — localize more of the owner workflow
+
+- Translate server status, model choice and fallback, the task list and
+  cancellation confirmation. The Telegram dispatcher test exercises both
+  confirmation and repeated cancellation with the production queue.
+- Record the live promotion checklist for historical migration, sandbox
+  rollback and multi-account quota recovery.
+
 ## Iteration 19 — make manual account changes recoverable
 
 - Account imports run under the core login lock after successful device

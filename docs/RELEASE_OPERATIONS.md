@@ -53,3 +53,29 @@ Beta и RC с указанием предыдущего проверенного
 теги и артефакты остаются неизменными. Для Stable нужны совпадающий RC,
 пройденные проверки установки, обновления и отката на отдельных
 инстансах и одобрение защищённого окружения.
+
+## Live acceptance checklist
+
+Use a separate Linux VPS, a disposable Telegram bot and two disposable
+Codex accounts. Record the candidate version, commit, archive checksum,
+OS and start and finish times. Keep the test data and keep credentials
+out of the evidence.
+
+1. Install the exact public v0.1.0. Exercise the bot in Telegram and seed
+   a test schedule, conversation history, owner settings and a legacy
+   module. Apply the attested bootstrap documented in [Updates](UPDATES.md).
+   Check those records and the owner session after the new service starts.
+2. Open the official-channel preview in Telegram and verify that legacy
+   main remains selected. Confirm the channel and check that the automatic
+   update policy still has its original value. Repeat the upgrade with a
+   forced candidate startup failure, then verify the old bot responds.
+3. Opt in to a supported legacy function's isolated version. Compare its
+   outputs with the original and roll it back. Verify its data survives
+   both transitions.
+4. Exercise real Codex quota exhaustion with an eligible alternate account,
+   token refresh, device sign-in cancellation and session recovery. Use a
+   disposable action ledger to detect duplicate side effects.
+5. Run the normal test workload through at least one full quota-reset window
+   and an intentional service restart. Record CPU, memory, disk growth,
+   missed jobs, duplicate actions and recovery time. Attach the independent
+   security review separately from CI and local maintainer results.

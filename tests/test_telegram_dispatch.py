@@ -422,6 +422,43 @@ else:
         _, _, error = await asyncio.wait_for(self.runtime['run_mercury']('test', timeout=0.04), 1)
         self.assertIn('таймаут', error)
 
+    async def test_english_tasks_status_and_model_views(self):
+        from contextlib import nullcontext
+
+        runtime = self.runtime
+        runtime['STATE']['ui_language'] = 'en'
+        runtime['post'] = AsyncMock(return_value=60)
+        runtime['edit'] = AsyncMock(return_value=True)
+        runtime['delete_msgs'] = AsyncMock()
+        runtime['waiting'] = lambda *args: nullcontext()
+        runtime['model_quota_status'] = AsyncMock(return_value=('', ''))
+        runtime['codex_default'] = lambda key: None
+        runtime['collect'] = AsyncMock(return_value=({}, {}))
+        queue = self.home / 'spool/jobs.json'
+        job_scheduler.write(queue, [{'id': 'task', 'at': 1700000000, 'every': 3600, 'prompt': 'Custom reminder'}])
+
+        await self.dispatch('jobs')
+        self.assertIn('Scheduled tasks', runtime['post'].await_args.args[1])
+        self.assertIn('every 1 h', runtime['post'].await_args.args[1])
+        await self.dispatch('jc:task')
+        self.assertIn('Cancel this task?', runtime['edit'].await_args.args[2])
+        self.assertEqual(runtime['edit'].await_args.args[3].inline_keyboard[0][0].callback_data, 'jcy:task')
+        await self.dispatch('jcy:task')
+        self.assertEqual(job_scheduler.list_jobs(queue), [])
+        self.assertIn('No tasks yet', runtime['post'].await_args.args[1])
+        await self.dispatch('jcy:task')
+        self.assertEqual(job_scheduler.list_jobs(queue), [])
+        await self.dispatch('status')
+        for line in ('Server status', 'Uptime', 'Previously healthy services are running'):
+            self.assertIn(line, runtime['post'].await_args.args[1])
+        runtime['CFG']['model'] = 'gpt-6.1-sol'
+        runtime['STATE']['fallback_until'] = time.time() + 60
+        await self.dispatch('model')
+        self.assertIn('Codex quota is exhausted', runtime['post'].await_args.args[1])
+        await self.dispatch('m:mercury-3')
+        self.assertEqual(runtime['CFG']['model'], 'mercury-3')
+        self.assertIn('**Model**', runtime['post'].await_args.args[1])
+
     async def test_scheduled_provider_error_keeps_claim_and_prevents_fallback(self):
         queue = self.home / 'spool/jobs.json'
         job_scheduler.write(queue, [{'id': 'task', 'at': 1, 'every': 120, 'prompt': 'check'}])

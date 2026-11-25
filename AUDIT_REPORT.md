@@ -47,6 +47,9 @@ quota details and the existing account budget callbacks. The pause notice
 explains the distinction between an unavailable quota sample and a confirmed
 reset time. The recovery test checks the notice and verifies that the
 resume call uses the original thread after finding an eligible account.
+The English owner workflow also exercises server status, model selection
+and recurring-task cancellation. Repeating a cancellation leaves the
+durable queue empty.
 
 ## Current Codex pool audit
 

@@ -1814,7 +1814,8 @@ async def view_menu():
 
 
 async def view_status():
-    return f"{E('status')} **Статус сервера**\n\n" + await quick_status(), kb((btn("Обновить", "status!", "refresh"),) + back())
+    title = ui_text("Статус сервера", "Server status")
+    return f"{E('status')} **{title}**\n\n" + await quick_status(), kb((btn(ui_text("Обновить", "Refresh"), "status!", "refresh"),) + back())
 
 
 async def view_limits():
@@ -1831,16 +1832,26 @@ async def view_limits():
     return text, kb(*rows, back())
 
 
+def job_repeat(job):
+    if not job.get("every"):
+        return ""
+    interval = win_name(job["every"] // 60, english=ui_text(False, True))
+    return f" · {E('repeat')} {ui_text('каждые', 'every')} {interval}"
+
+
 async def view_jobs():
     jobs = jobs_list()
+    title = f"{E('jobs')} **{ui_text('Отложенные задачи', 'Scheduled tasks')}**"
     if not jobs:
-        return (f"{E('jobs')} **Отложенные задачи**\n\nПока пусто. Попроси, например: "
-                "«каждые 6 часов смотри, не растёт ли диск» или «завтра в 10 напомни про бэкап»."), kb(back())
-    lines, rows = [f"{E('jobs')} **Отложенные задачи**"], []
+        return title + "\n\n" + ui_text(
+            "Пока пусто. Попроси, например: «каждые 6 часов смотри, не растёт ли диск» "
+            "или «завтра в 10 напомни про бэкап».",
+            "No tasks yet. Ask me to check disk usage every six hours or remind you to back up tomorrow at 10.",
+        ), kb(back())
+    lines, rows = [title], []
     for j in jobs:
         when = dt.datetime.fromtimestamp(j["at"]).strftime("%d.%m %H:%M")
-        ev = f" · {E('repeat')} каждые {win_name(j['every'] // 60)}" if j.get("every") else ""
-        lines.append(f"\n**{when}**{ev}\n{j['prompt'][:200]}")
+        lines.append(f"\n**{when}**{job_repeat(j)}\n{j['prompt'][:200]}")
         rows.append((btn(f"{when} · {j['prompt'][:25]}", f"jc:{j['id']}", "cross"),))
     return "\n".join(lines), kb(*rows, back())
 
@@ -1873,7 +1884,7 @@ def current_model():
 def model_label():
     model, effort = current_model()
     if fallback_active() and model != MERCURY_MODEL:
-        return "Mercury 3 ⚡ (лимит)"
+        return ui_text("Mercury 3 ⚡ (лимит)", "Mercury 3 ⚡ (quota fallback)")
     return f"{MODELS.get(model, (model,))[0]} · {effort}"
 
 
@@ -1885,13 +1896,22 @@ def save_config():
 async def view_model():
     model, effort = current_model()
     efforts = MODELS.get(model, ("", ["low", "medium", "high"], ""))[1]
-    text = (f"{E('robot')} **Модель**\n\n"
-            f"Сейчас: **{MODELS.get(model, (model,))[0]}** (`{model}`), effort **{effort}**"
-            + (f"\n{E('warn')} лимит Codex кончился — до {dt.datetime.fromtimestamp(STATE['fallback_until']):%H:%M} "
-               "работаю на Mercury 3 ⚡" if fallback_active() else "") +
-            "\n\n*Effort — сколько модель думает перед ответом: выше — умнее, но дольше и быстрее съедает лимит.*\n"
-            "*Mercury 3 ⚡ — очень быстрая модель Inception, не тратит лимит Codex; попроще в сложных задачах. "
-            "Она же — запасная, когда лимит Codex кончается.*")
+    title = ui_text("Модель", "Model")
+    current = ui_text("Сейчас", "Current")
+    text = (f"{E('robot')} **{title}**\n\n"
+            f"{current}: **{MODELS.get(model, (model,))[0]}** (`{model}`), effort **{effort}**")
+    if fallback_active():
+        cutoff = dt.datetime.fromtimestamp(STATE["fallback_until"]).strftime("%H:%M")
+        text += f"\n{E('warn')} " + ui_text(
+            "Лимит Codex кончился. Работаю на Mercury 3 ⚡ до {}.",
+            "Codex quota is exhausted. Using Mercury 3 ⚡ until {}.",
+        ).format(cutoff)
+    text += "\n\n" + ui_text(
+        "*Effort — сколько модель думает перед ответом: выше — умнее, но дольше и быстрее съедает лимит.*\n"
+        "*Mercury 3 ⚡ — быстрая модель Inception. Она не тратит лимит Codex и служит запасной.*",
+        "*Higher effort makes the model reason longer and use more quota.*\n"
+        "*Mercury 3 ⚡ is a fast Inception model that serves as a fallback without using Codex quota.*",
+    )
     groups = {"Codex": [], "Antigravity": [], "Mercury": []}
     for model_id, (name, _, _) in MODELS.items():
         provider = "Codex"
@@ -2433,12 +2453,12 @@ async def handle_button(cb: CallbackQuery):
     if data.endswith("!") and data[:-1] in VIEWS:
         FORCE.set(True)
         await cb.answer()
-        async with waiting(chat, "обновляю"):
+        async with waiting(chat, ui_text("обновляю", "Refreshing")):
             return await show(chat, data[:-1], mid)
     if data in VIEWS:
         await cb.answer()
         if data in SLOW_VIEWS:
-            async with waiting(chat, "собираю данные"):
+            async with waiting(chat, ui_text("собираю данные", "Collecting data")):
                 return await show(chat, data, mid)
         return await show(chat, data, mid)
     if data == "watch":
@@ -2479,7 +2499,7 @@ async def handle_button(cb: CallbackQuery):
         if CFG.get("effort") not in MODELS[data[2:]][1]:
             CFG["effort"] = MODELS[data[2:]][2]
         save_config()
-        await cb.answer(f"Модель: {model_label()}")
+        await cb.answer(f"{ui_text('Модель', 'Model')}: {model_label()}")
         return await show(chat, "model", mid)
     if data.startswith("ef:"):
         CFG["effort"] = data[3:]
@@ -2547,18 +2567,21 @@ async def handle_button(cb: CallbackQuery):
     if data.startswith("jc:"):
         j = next((j for j in jobs_list() if j["id"] == data[3:]), None)
         if not j:
-            await cb.answer("Уже нет такой")
+            await cb.answer(ui_text("Уже нет такой", "Task no longer exists"))
             return await show(chat, "jobs", mid)
         await cb.answer()
         when = dt.datetime.fromtimestamp(j["at"]).strftime("%d.%m %H:%M")
-        if await edit(chat, mid, f"{E('warn')} **Отменить задачу?**\n\n**{when}**"
-                      + (f" · {E('repeat')} каждые {win_name(j['every'] // 60)}" if j.get("every") else "")
+        title = ui_text("Отменить задачу?", "Cancel this task?")
+        if await edit(chat, mid, f"{E('warn')} **{title}**\n\n**{when}**"
+                      + job_repeat(j)
                       + f"\n{j['prompt'][:500]}",
-                      kb((btn("Да, отменить", f"jcy:{j['id']}", "cross", "danger"), btn("Нет", "jobs", "back")))):
+                      kb((btn(ui_text("Да, отменить", "Cancel task"), f"jcy:{j['id']}", "cross", "danger"),
+                          btn(ui_text("Нет", "Keep task"), "jobs", "back")))):
             return
         return await show(chat, "jobs", mid)
     if data.startswith("jcy:"):
-        await cb.answer("Отменил" if cancel_job(data[4:]) else "Уже нет такой")
+        await cb.answer(ui_text("Отменил", "Task cancelled") if cancel_job(data[4:])
+                        else ui_text("Уже нет такой", "Task no longer exists"))
         return await show(chat, "jobs", mid)
     if data.startswith("q:") and data[2:] in QUICK:
         title, prompt = QUICK[data[2:]]
@@ -5131,13 +5154,17 @@ async def quick_status():
     du = shutil.disk_usage("/")
     mi = meminfo()
     l1, l5, _ = os.getloadavg()
-    up = time.time() - float(open("/proc/uptime").read().split()[0])
+    uptime = float(Path("/proc/uptime").read_text().split()[0]) / 86400
+    space = ui_text("диск", "Disk")
+    free = ui_text("свободно", "free")
+    available = ui_text("доступно", "available")
+    gib = ui_text("ГБ", "GiB")
     lines = [
-        f"{E('disk')} диск: {du.used / du.total * 100:.0f}% (свободно {du.free / 2**30:.1f} ГБ)",
-        f"{E('ram')} RAM: доступно {mi['MemAvailable'] / 2**30:.1f} из {mi['MemTotal'] / 2**30:.1f} ГБ, "
-        f"swap {(mi['SwapTotal'] - mi['SwapFree']) / 2**30:.1f} ГБ",
+        f"{E('disk')} {space}: {du.used / du.total * 100:.0f}% ({free} {du.free / 2**30:.1f} {gib})",
+        f"{E('ram')} RAM: {available} {mi['MemAvailable'] / 2**30:.1f} {ui_text('из', 'of')} "
+        f"{mi['MemTotal'] / 2**30:.1f} {gib}, swap {(mi['SwapTotal'] - mi['SwapFree']) / 2**30:.1f} {gib}",
         f"{E('load')} load: {l1:.2f} / {l5:.2f} ({os.cpu_count()} CPU)",
-        f"{E('uptime')} аптайм: {(time.time() - up) / 86400:.1f} дн",
+        f"{E('uptime')} {ui_text('аптайм', 'Uptime')}: {uptime:.1f} {ui_text('дн', 'd')}",
     ]
     try:
         if not FORCE.get() and SNAPSHOT["data"] and time.time() - SNAPSHOT["at"] < WATCH_INTERVAL + 60:
@@ -5149,20 +5176,22 @@ async def quick_status():
         lines += [f"{E('warn')} {a}" for a in alerts.values()]
         lines.append("")
         if down:
-            lines.append(f"{E('down')} **упало (раньше работало): {len(down)}**")
+            label = ui_text("упало (раньше работало)", "Previously healthy services down")
+            lines.append(f"{E('down')} **{label}: {len(down)}**")
             lines += [f"- {d}" for d in down[:10]] + [""]
         else:
-            lines.append(f"{E('ok')} всё, что работало, работает")
+            lines.append(f"{E('ok')} " + ui_text("всё, что работало, работает", "Previously healthy services are running"))
     except Exception as e:
-        lines.append(f"(мониторинг: {e})")
+        lines.append(f"({ui_text('мониторинг', 'Monitoring')}: {e})")
     try:
         provider, short = await model_quota_status()
         if short:
             lines.append(f"{E('robot')} {provider}: {short}")
     except Exception:
         pass
-    lines.append(f"{E('eye' if STATE['watch'] else 'eyeoff')} автонадзор: {'вкл' if STATE['watch'] else 'выкл'}"
-                 f"{' · занят' if user_lane.current or bg_lane.current else ''}")
+    watch = ui_text("вкл", "on") if STATE["watch"] else ui_text("выкл", "off")
+    busy = ui_text(" · занят", " · busy") if user_lane.current or bg_lane.current else ""
+    lines.append(f"{E('eye' if STATE['watch'] else 'eyeoff')} {ui_text('автонадзор', 'Monitoring')}: {watch}{busy}")
     return "\n".join(lines)
 
 
