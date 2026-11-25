@@ -176,6 +176,7 @@ The project registry starts empty at `memory/registry.json`. Ask Nook to invento
 - Agent instructions and skills live in `AGENTS.md` and `.agents/skills/`.
 - `owner_api`, `openbot_bridge`, and `codex_accounts` are disabled by default.
 - Account switching requires a separate compatible `codex-auth` utility (`list`, `switch`, and `import`). That utility is not bundled. Standard Codex login is independent of it.
+- Enable the optional pool under **Limits → Codex pool → Pool settings**. It uses logins saved by a compatible `codex-auth` and requires Codex CLI to report account IDs and live quota eligibility. Choose an order and set per-account limits before routing tasks. A 0% budget excludes an account. Reset notices and weekly warm-up are optional. Warm-up sends one short real request and can consume quota. Use only accounts and workspaces you are authorized to use.
 - OpenBot, Status Board, backups, DNS, GitHub, and MCP integrations need separate configuration and credentials. They are not preconfigured services in this release.
 
 The Russian menu labels for interface customization are `Меню → Настройки` (Menu → Settings), then `Под ответами` (Answers), `Главное меню` (Main menu), or `Оформление` (Appearance). Changes save immediately. Hidden sections remain available under `Ещё` (More); interface presets do not change monitoring or provider settings.

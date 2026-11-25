@@ -33,6 +33,7 @@ os.umask(0o077)
 
 import guard
 import antigravity_limits
+from codex_pool import Pool as CodexPool, REFRESH as POOL_REFRESH
 import mods as modsys
 import job_scheduler
 from agent_process import read_tail, stop_process_group
@@ -621,11 +622,28 @@ def context_tokens():
         return None
 
 
-async def run_codex(prompt, thread_id=None, images=(), on_step=None, run: Run = None, timeout=USER_TIMEOUT):
+def active_codex_pool():
+    mod = REG.mods.get("codex_pool")
+    pool = getattr(mod, "pool", None)
+    return pool if pool is not None and pool.enabled() else None
+
+
+async def run_codex(prompt, thread_id=None, images=(), on_step=None, run=None, timeout=USER_TIMEOUT):
+    pool = active_codex_pool()
+    if pool is not None:
+        return await pool.run(_run_codex, prompt, thread_id, images, on_step, run or Run(),
+                              timeout, CFG.get("model"))
+    return await _run_codex(prompt, thread_id, images, on_step, run, timeout)
+
+
+async def _run_codex(prompt, thread_id=None, images=(), on_step=None, run: Run = None,
+                     timeout=USER_TIMEOUT, *, account_env=None):
     """Запустить codex exec (или resume); вернуть (thread_id, final_text, error)."""
     out_file = os.path.join(HOME, "spool", f"last-{uuid.uuid4().hex[:8]}.txt")
     cmd = [CODEX, "exec", "--json", "--skip-git-repo-check", "-C", HOME,
            "--dangerously-bypass-approvals-and-sandbox", "-o", out_file]
+    if account_env is not None:
+        cmd += ["-c", 'cli_auth_credentials_store="file"', "-c", 'model_provider="openai"']
     if CFG.get("model"):
         cmd += ["-m", CFG["model"]]
     if CFG.get("effort"):
@@ -641,8 +659,13 @@ async def run_codex(prompt, thread_id=None, images=(), on_step=None, run: Run = 
     run_id = uuid.uuid4().hex[:12]
     if thread_id:
         RUN_THREADS[run_id] = thread_id
+    env = codex_env(run_id)
+    if account_env is not None:
+        env.pop("OPENAI_API_KEY", None)
+        env.pop("CODEX_API_KEY", None)
+        env.update(account_env)
     proc = await asyncio.create_subprocess_exec(
-        *cmd, cwd=HOME, env=codex_env(run_id), start_new_session=True, limit=16 * 1024 * 1024,
+        *cmd, cwd=HOME, env=env, start_new_session=True, limit=16 * 1024 * 1024,
         stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
     run.proc = proc
     new_thread, last_msg, errors = thread_id, "", []
@@ -1098,10 +1121,17 @@ async def run_agent(prompt, thread_id=None, images=(), on_step=None, run=None, t
 CODEX_SESSIONS = os.path.expanduser("~/.codex/sessions")
 
 
-async def limits_live():
-    """Спросить лимиты у codex app-server (JSON-RPC по stdio)."""
+async def read_codex_limits(account_env=None):
+    """Read rate limits from the selected Codex login via app-server."""
+    cmd = [CODEX, "app-server"]
+    env = codex_env()
+    if account_env is not None:
+        cmd += ["-c", 'cli_auth_credentials_store="file"', "-c", 'model_provider="openai"']
+        env = {key: value for key, value in env.items()
+               if key in ("HOME", "PATH", "LANG", "LC_ALL", "SSL_CERT_FILE", "SSL_CERT_DIR")}
+        env.update(account_env)
     proc = await asyncio.create_subprocess_exec(
-        CODEX, "app-server", env=codex_env(), start_new_session=True, limit=4 * 1024 * 1024,
+        *cmd, env=env, start_new_session=True, limit=4 * 1024 * 1024,
         stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
     try:
         for m in ({"id": 1, "method": "initialize", "params": {"clientInfo": {"name": "nook", "version": "1"}}},
@@ -1120,9 +1150,37 @@ async def limits_live():
                     if "error" in ev:
                         raise RuntimeError(ev["error"].get("message", "error"))
                     return ev["result"]
-        r = await asyncio.wait_for(read(), 20)
+        result = await asyncio.wait_for(read(), 20)
+        if not isinstance(result, dict):
+            raise RuntimeError("Codex closed the quota connection")
+        return result
     finally:
         await stop_process_group(proc)
+
+
+async def codex_pool_warmup(account_env, model):
+    cmd = [CODEX, "exec", "--ephemeral", "--ignore-user-config", "--ignore-rules",
+           "--skip-git-repo-check", "--sandbox", "read-only", "--disable", "shell_tool",
+           "--disable", "hooks", "--disable", "plugins", "-c", 'web_search="disabled"',
+           "-c", 'cli_auth_credentials_store="file"', "-c", 'model_provider="openai"',
+           "-c", 'model_reasoning_effort="low"']
+    if model:
+        cmd.extend(("-m", model))
+    env = {key: os.environ[key] for key in
+           ("HOME", "PATH", "LANG", "LC_ALL", "SSL_CERT_FILE", "SSL_CERT_DIR") if key in os.environ}
+    env.update(account_env)
+    with tempfile.TemporaryDirectory(prefix="nook-codex-warmup-") as cwd:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd, "Reply with just OK.", cwd=cwd, env=env, start_new_session=True,
+            stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+        try:
+            return await asyncio.wait_for(proc.wait(), 45) == 0
+        finally:
+            await stop_process_group(proc)
+
+
+async def limits_live():
+    r = await read_codex_limits()
     rl = r["rateLimits"]
     win = lambda w: w and {"used": w["usedPercent"], "mins": w["windowDurationMins"], "reset": w["resetsAt"]}
     return {"primary": win(rl.get("primary")), "secondary": win(rl.get("secondary")),
@@ -1166,6 +1224,18 @@ async def get_limits(max_age=60):
     """Лимиты: из памяти, если свежие, иначе живой запрос (≈1 с), при ошибке — из логов."""
     if FORCE.get():
         max_age = 0
+    pool = active_codex_pool()
+    accounts = pool.accounts() if pool else []
+    if accounts:
+        model = CFG.get("model")
+        await pool.refresh(accounts, model, force=not max_age)
+        now = time.time()
+        statuses = [pool.status(account, model, now) for account in accounts]
+        ready = sum(status == "ready" for status, _, _ in statuses)
+        quota_resets = [reset for status, _, reset in statuses if status == "quota"]
+        text = f"Пул Codex · доступны {ready} из {sum(pool.cap(a) > 0 for a in accounts)}"
+        return {"pool_label": text, "reached": None if ready else "pool",
+                "pool_reset": max(now + 1, min(quota_resets, default=now + POOL_REFRESH))}
     if LIMITS_CACHE["data"] and time.time() - LIMITS_CACHE["at"] < max_age:
         return LIMITS_CACHE["data"]
     try:
@@ -1202,6 +1272,8 @@ def bar(pct, n=10):
 def fmt_limits(L):
     if not L:
         return f"{E('err')} Не смог узнать лимиты Codex (нет ответа от app-server и нет логов сессий)."
+    if "pool_label" in L:
+        return f"{E('limits')} **{L['pool_label']}**"
     lines = [f"{E('limits')} **Лимиты Codex**" + (f" · {L['plan']}" if L.get("plan") else "")]
     for key in ("primary", "secondary"):
         w = L.get(key)
@@ -1246,6 +1318,8 @@ async def limits_note(engine=None, antigravity_model=None):
 def limits_short(L):
     if not L:
         return ""
+    if "pool_label" in L:
+        return L["pool_label"]
     parts = [f"{win_name(w['mins'])} {w['used']:.0f}%" for w in (L.get("primary"), L.get("secondary")) if w]
     return " · ".join(parts)
 
@@ -1325,7 +1399,7 @@ async def pause_for_limit(item, partial=""):
     L = await get_limits(0)
     L = L or {}
     resets = [w["reset"] for w in (L.get("primary"), L.get("secondary")) if w and w["used"] >= 99]
-    reset = max(resets) if resets else time.time() + 3600
+    reset = L.get("pool_reset") or (max(resets) if resets else time.time() + 3600)
     item.update(at=time.time(), reset=reset)
     q = STATE.setdefault("paused", [])
     q.append(item)
@@ -1676,7 +1750,10 @@ async def view_limits():
     model, _ = current_model()
     parts = (agy_text, codex_text) if is_antigravity_model(model) else (codex_text, agy_text)
     text = "\n\n".join(parts)
-    return text, kb((btn("Обновить", "limits!", "refresh"),) + back())
+    rows = [(btn("Обновить", "limits!", "refresh"),)]
+    if "codex_pool" in REG.mods:
+        rows.append((btn("Пул Codex", "mod:codex_pool:open", "chatgpt"),))
+    return text, kb(*rows, back())
 
 
 async def view_jobs():
@@ -4788,6 +4865,10 @@ core.llm = llm
 core.digest = lambda text, buttons=(): digest(text, buttons)
 core.bg_task = lambda prompt, title: run_task(bg_lane, prompt, background=True, show_progress=False, header=E("plus") + " ")
 core.codex_login = do_login
+core.codex_pool_runtime = CodexPool(Path.home() / ".codex", {}, read_codex_limits, CODEX_LOGIN_LOCK)
+core.codex_model = lambda: CFG.get("model")
+core.codex_window_name = win_name
+core.codex_pool_warmup = codex_pool_warmup
 core.bot, core.tg, core.state = bot, tg, STATE
 core.maintenance_lanes = (user_lane, bg_lane)
 REG = modsys.Registry(core)
@@ -4890,7 +4971,7 @@ VIEWS["mods"] = view_mods
 async def check_limits():
     """Предупредить хозяина один раз за окно, когда лимит Codex перевалил за 90%."""
     L = await get_limits(0)
-    if not L:
+    if not L or "pool_label" in L:
         return
     # если живые данные говорят, что лимит уже сброшен, а откат ещё активирован (по старому состояу) — снять его
     if not L.get("reached") and not any(w and w["used"] >= 97 for w in (L.get("primary"), L.get("secondary"))):

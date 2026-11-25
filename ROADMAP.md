@@ -2,6 +2,10 @@
 
 ## Current work
 
+- Ported opt-in Codex routing to the public release tree. The disposable
+  fixture checks the Telegram owner gate, least-quota selection and CLI
+  resume. Test managed-account token refresh and recovery on a spare host.
+
 - Iteration 5 implements a separate local extension lifecycle, isolated API v1
   execution, owner policy, versioning, health checks, and automatic rollback.
   Trusted legacy modules can be pinned by hash without migrating their API.

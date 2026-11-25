@@ -1,5 +1,12 @@
 # Modernization log
 
+## Iteration 7 — Codex account pool
+
+- Started from main after #7 and #8 merged. Ported opt-in quota routing,
+  budgets, reset notices and optional warm-up from the private deployment.
+- Included saved logins in opt-in provider backups and checked that a quota
+  rejection resumes the same thread with no global credential switch.
+
 ## 2026-11-24 — Iteration 5
 
 - Added staged Python mods/tools and text skills, with content-addressed

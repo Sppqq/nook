@@ -1,5 +1,15 @@
 # Nook technical audit
 
+## Current Codex pool audit
+
+- Enabled only by the owner. Routing verifies the quota workspace and
+  explicit backend eligibility, deduplicates workspaces, bounds quota reads,
+  and suppresses retry after observed side effects. Alternate logins do not
+  replace the primary auth file. External provider backups explicitly include
+  the saved logins and exclude generated links.
+- The fixture exercises actual Nook dispatch and Codex CLI protocol via local
+  subprocesses. A live multi-account soak and independent audit remain open.
+
 ## Current findings
 
 - Iteration 5 introduces staged local extensions. Draft code never loads into

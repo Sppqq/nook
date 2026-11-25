@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add an opt-in Codex account pool with four routing orders, per-account quota budgets, safe conversation continuation, reset notifications, and optional weekly warm-up.
+
 - Group models by provider in Telegram. Add Antigravity Carbon and Hydrogen when available in the provider account.
 - Show the active provider's quota in the menu and status. The optional Codex account switcher can display quota for saved accounts with a compatible codex-auth CLI.
 - Add a close button to the main menu and show Antigravity progress from the start of a request.

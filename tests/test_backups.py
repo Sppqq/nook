@@ -70,6 +70,8 @@ class BackupTests(unittest.TestCase):
     def test_backup_includes_known_external_provider_auth_and_codex_sessions(self):
         private_files = {
             '.codex/auth.json': '{"tokens":"private"}\n',
+            '.codex/accounts/registry.json': '{"accounts":[]}\n',
+            '.codex/accounts/cHJpbWFyeQ.auth.json': '{"saved":"private"}\n',
             '.codex/config.toml': 'model = "test"\n',
             '.codex/sessions/2026/session.jsonl': '{"conversation":"private"}\n',
             '.gemini/antigravity-cli/antigravity-oauth-token': 'oauth-private\n',
@@ -81,6 +83,9 @@ class BackupTests(unittest.TestCase):
             path.chmod(0o600)
         ignored = self.provider_home / '.codex/sessions/cache.tmp'
         ignored.write_text('temporary')
+        pool_cache = self.provider_home / '.codex/accounts/.nook-pool'
+        pool_cache.mkdir()
+        (pool_cache / 'auth.json').symlink_to(self.provider_home / '.codex/auth.json')
 
         default_backup = b.create_backup(self.home)
         with tarfile.open(default_backup, 'r:gz') as archive:
@@ -92,6 +97,7 @@ class BackupTests(unittest.TestCase):
             self.assertEqual((restored / rel).read_text(), content)
             self.assertEqual((restored / rel).stat().st_mode & 0o777, 0o600)
         self.assertFalse((restored / 'provider-home/.codex/sessions/cache.tmp').exists())
+        self.assertFalse((restored / 'provider-home/.codex/accounts/.nook-pool').exists())
 
     def test_provider_auth_symlink_fails_closed(self):
         external = self.home.parent / 'external-auth'

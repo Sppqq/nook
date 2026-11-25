@@ -31,8 +31,11 @@ class TelegramDispatchTests(unittest.IsolatedAsyncioTestCase):
         self.runtime = sandbox
         self.addAsyncCleanup(self.runtime['bot'].session.close)
         registry = self.runtime['REG']
+        state_dir = patch.object(self.runtime['modsys'], 'SPOOL', str(self.home / 'spool/mods'))
+        state_dir.start()
+        self.addCleanup(state_dir.stop)
         (self.home / 'mods').mkdir()
-        for name in ('update_manager', 'local_extension_ui'):
+        for name in ('update_manager', 'local_extension_ui', 'codex_pool'):
             mod_path = self.home / 'mods' / f'{name}.py'
             shutil.copyfile(ROOT / 'mods' / f'{name}.py', mod_path)
             spec = importlib.util.spec_from_file_location('disposable_' + name, mod_path)
@@ -55,6 +58,54 @@ class TelegramDispatchTests(unittest.IsolatedAsyncioTestCase):
         })
         with patch.object(CallbackQuery, 'answer', new_callable=AsyncMock):
             await self.runtime['dp'].feed_update(self.runtime['bot'], update)
+
+    async def test_owner_pool_strategy_and_cli_resume_after_quota(self):
+        from test_codex_pool import fake_accounts
+        pool = self.runtime["REG"].mods["codex_pool"].pool
+        pool.root = self.home / ".codex"
+        fake_accounts(pool.root)
+        await self.dispatch("mod:codex_pool:toggle:enabled", sender=8, chat=8)
+        self.assertFalse(pool.enabled())
+        await self.dispatch("mod:codex_pool:toggle:enabled")
+        await self.dispatch("mod:codex_pool:strategy:least")
+        self.assertTrue(pool.enabled())
+        self.assertEqual(pool.settings["strategy"], "least")
+        cli = self.home / "codex-fixture"
+        cli.write_text('''#!/usr/bin/env python3
+import json, os, pathlib, sys, time
+home = pathlib.Path(os.environ["CODEX_HOME"])
+who = (home / "auth.json").read_text()
+args = sys.argv[1:]
+if args[0] == "app-server":
+    for line in sys.stdin:
+        req = json.loads(line)
+        if req.get("id") == 2:
+            print(json.dumps({"id": 2, "result": {
+                "accountId": who, "ordinaryUsageAllowed": True,
+                "rateLimits": {"secondary": {"usedPercent": 96 if who == "reserve" else 0,
+                                               "windowDurationMins": 10080, "resetsAt": time.time()+3600}},
+            }}), flush=True)
+            break
+else:
+    prompt = sys.stdin.read()
+    assert "OPENAI_API_KEY" not in os.environ
+    print(json.dumps({"type":"thread.started", "thread_id":"fixture-thread"}))
+    if who == "reserve":
+        assert "resume" not in args
+        print(json.dumps({"type":"turn.failed", "error":{"message":"usage_limit_reached"}}))
+    else:
+        assert prompt == "finish"
+        assert args[-3:] == ["resume", "fixture-thread", "-"]
+        print(json.dumps({"type":"item.completed", "item":{"type":"agent_message", "text":"done"}}))
+''')
+        cli.chmod(0o700)
+        self.runtime["CODEX"] = str(cli)
+        (self.home / "spool").mkdir(exist_ok=True)
+        (self.home / "secrets.env").write_text("OPENAI_API_KEY=fixture-only\n")
+        run = self.runtime["run_codex"]
+        self.assertEqual(await run("finish", timeout=8), ("fixture-thread", "done", None))
+        self.assertEqual((pool.root / "auth.json").read_text(), "primary")
+        self.assertEqual(set(self.runtime["RUN_THREADS"].values()), {"fixture-thread"})
 
     async def test_owner_channel_confirmation_and_empty_release_list(self):
         await self.dispatch('mod:update_manager:choose-channel:beta')
@@ -145,7 +196,7 @@ if prompt == 'after-command':
 print(json.dumps({'type': 'turn.failed', 'message': 'usage limit'}))
 """)
         cli.chmod(0o700)
-        (self.home / 'spool').mkdir()
+        (self.home / 'spool').mkdir(exist_ok=True)
         self.runtime['CODEX'] = str(cli)
         self.runtime['pause_for_limit'] = AsyncMock()
         self.runtime['limits_note'] = AsyncMock(return_value='')
@@ -167,7 +218,7 @@ print(json.dumps({'event': 'result', 'result': {'status': 'SUCCESS',
       'response': 'resumed' if resumed else 'fresh'}}))
 """)
         cli.chmod(0o700)
-        (self.home / 'spool').mkdir()
+        (self.home / 'spool').mkdir(exist_ok=True)
         self.runtime['AGY_BIN'] = str(cli)
         self.runtime['CFG']['model'] = 'antigravity-argon'
         ident, answer, error = await self.runtime['run_agent']('hello', timeout=5)
