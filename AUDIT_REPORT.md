@@ -2,6 +2,11 @@
 
 ## Current Codex pool audit
 
+- Pool recovery distinguishes an unavailable quota sample from a confirmed
+  limit. It retries unavailable samples promptly even when a different
+  account has a later reset. The routing fixture checks both the provider
+  error code and lookalike errors from other failures.
+
 - Enabled only by the owner. Routing verifies the quota workspace and
   explicit backend eligibility, deduplicates workspaces, bounds quota reads,
   and suppresses retry after observed side effects. Alternate logins do not

@@ -621,8 +621,9 @@ def _check_legacy_queue(home):
     workspace = nook_update.path_at(home, 'spool/updates')
     request = nook_update.path_at(workspace, 'request.json')
     transaction = nook_update.path_at(workspace, 'transaction.json')
-    if (request.exists() or transaction.exists()
-            and nook_update.read_json(transaction).get('status') not in ('success', 'rolled_back')):
+    if request.exists():
+        raise MigrationError('Сначала заверши или отмени прежнее обновление Nook.')
+    if transaction.exists() and _read_json(transaction).get('status') not in ('success', 'rolled_back'):
         raise MigrationError('Сначала заверши или отмени прежнее обновление Nook.')
 
 

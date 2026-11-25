@@ -2,6 +2,9 @@
 
 ## Current work
 
+- The pool checks unknown quota again before distant account resets and
+  resumes as soon as an eligible account is confirmed.
+
 - PR #9 continues the work integrated into main by #7 and #8.
 - The original v0.1.1 Telegram updater can adopt the candidate through
   its existing code-only main update. A disposable user-systemd test

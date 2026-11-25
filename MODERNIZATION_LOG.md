@@ -1,5 +1,14 @@
 # Modernization log
 
+## Iteration 9 — pool recovery and migration interlock
+
+- Corrected Codex pool retry timing and error classification with aiogram
+  integration coverage. An available account triggers a prompt retry.
+- A queued code update now blocks a simultaneous full migration even if
+  the previous update journal already reports success.
+- Downloaded and verified the existing public Alpha ZIP and its GitHub
+  provenance with the production release client at source commit beef3a4.
+
 ## Iteration 8 — existing Telegram updater
 
 - Reused the frozen v0.1.1 worker for first adoption from main. The startup

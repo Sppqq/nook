@@ -108,6 +108,25 @@ class LegacyMigrationPlannerTests(unittest.TestCase):
         (stage / 'mods').chmod(original ^ 0o020)
         self.assertFalse(migration._matches_snapshot_excluding_stage_changes(self.home, stage, changed))
 
+    def test_pending_update_blocks_migration_even_without_transaction(self):
+        workspace = nook_update.workspace(self.home)
+        pending = workspace / 'request.json'
+        transaction = workspace / 'transaction.json'
+        pending.write_text('{"id":"0011223344556677"}')
+        with self.assertRaisesRegex(migration.MigrationError, 'прежнее обновление'):
+            migration._check_legacy_queue(self.home)
+        transaction.write_text('{"status":"success"}')
+        with self.assertRaisesRegex(migration.MigrationError, 'прежнее обновление'):
+            migration._check_legacy_queue(self.home)
+        pending.unlink()
+        migration._check_legacy_queue(self.home)
+        transaction.write_text('{"status":"applying"}')
+        with self.assertRaisesRegex(migration.MigrationError, 'прежнее обновление'):
+            migration._check_legacy_queue(self.home)
+        transaction.write_text('[]')
+        with self.assertRaises(migration.MigrationError):
+            migration._check_legacy_queue(self.home)
+
     def test_provisional_startup_requires_a_commit_for_the_same_tree(self):
         self.assertFalse(migration.startup_held(self.home))
         marker = self.home / migration.CUTOVER_MARKER

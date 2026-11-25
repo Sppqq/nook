@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import shutil
 import tempfile
+import time
 import unittest
 from unittest.mock import AsyncMock, patch
 
@@ -106,6 +107,62 @@ else:
         self.assertEqual(await run("finish", timeout=8), ("fixture-thread", "done", None))
         self.assertEqual((pool.root / "auth.json").read_text(), "primary")
         self.assertEqual(set(self.runtime["RUN_THREADS"].values()), {"fixture-thread"})
+
+    async def test_pool_pause_rechecks_unknown_quota_before_another_accounts_reset(self):
+        from test_codex_pool import fake_accounts, limits
+        pool = self.runtime["REG"].mods["codex_pool"].pool
+        pool.root = self.home / ".codex"
+        fake_accounts(pool.root)
+        await self.dispatch("mod:codex_pool:toggle:enabled")
+
+        reset = time.time() + 3600
+
+        async def quota(env):
+            account = (Path(env["CODEX_HOME"]) / "auth.json").read_text()
+            if account == "primary":
+                raise RuntimeError("temporary app-server error")
+            return limits(account, 100, reset)
+
+        pool.read_limits = quota
+        self.runtime["notify"] = AsyncMock()
+        await self.runtime["pause_for_limit"]({"background": False})
+        paused = self.runtime["STATE"]["paused"][0]
+        self.assertAlmostEqual(paused["reset"] - paused["at"], 60, delta=2)
+        message = self.runtime["notify"].await_args.args[0]
+        self.assertIn("Проверю пул", message)
+        self.assertNotIn("после сброса", message)
+
+        async def available(env):
+            account = (Path(env["CODEX_HOME"]) / "auth.json").read_text()
+            return limits(account, 5 if account == "primary" else 100, reset)
+
+        pool.read_limits = available
+        status = await self.runtime["get_limits"](0)
+        self.assertIsNone(status["reached"])
+        self.assertLess(status["pool_reset"], time.time() + 2)
+
+    async def test_pool_pauses_only_on_recognized_quota_error(self):
+        from test_codex_pool import fake_accounts
+        pool = self.runtime["REG"].mods["codex_pool"].pool
+        pool.root = self.home / ".codex"
+        fake_accounts(pool.root)
+        await self.dispatch("mod:codex_pool:toggle:enabled")
+        runtime = self.runtime
+        runtime["engine_for"] = lambda _: "codex"
+        runtime["send"] = AsyncMock(return_value=1)
+        runtime["limits_note"] = AsyncMock(return_value="")
+        runtime["pause_for_limit"] = AsyncMock()
+        runtime["run_agent"] = AsyncMock(side_effect=[
+            (None, "", "invalid quota config path"),
+            ("conversation", "", "usage_limit_reached"),
+        ])
+        await runtime["run_task"](runtime["user_lane"], "first", show_progress=False)
+        runtime["pause_for_limit"].assert_not_awaited()
+        runtime["send"].assert_awaited_once()
+        await runtime["run_task"](runtime["user_lane"], "second", show_progress=False)
+        runtime["pause_for_limit"].assert_awaited_once()
+        recorded = runtime["pause_for_limit"].await_args.args[0]
+        self.assertEqual(recorded["thread"], "conversation")
 
     async def test_owner_channel_confirmation_and_empty_release_list(self):
         await self.dispatch('mod:update_manager:choose-channel:beta')

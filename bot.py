@@ -33,7 +33,7 @@ os.umask(0o077)
 
 import guard
 import antigravity_limits
-from codex_pool import Pool as CodexPool, REFRESH as POOL_REFRESH
+from codex_pool import Pool as CodexPool, QUOTA_ERROR as POOL_QUOTA_ERROR, REFRESH as POOL_REFRESH
 import mods as modsys
 import job_scheduler
 from agent_process import read_tail, stop_process_group
@@ -1230,12 +1230,17 @@ async def get_limits(max_age=60):
         model = CFG.get("model")
         await pool.refresh(accounts, model, force=not max_age)
         now = time.time()
-        statuses = [pool.status(account, model, now) for account in accounts]
+        statuses = [pool.status(account, model, now) for account in accounts if pool.cap(account) > 0]
         ready = sum(status == "ready" for status, _, _ in statuses)
-        quota_resets = [reset for status, _, reset in statuses if status == "quota"]
-        text = f"Пул Codex · доступны {ready} из {sum(pool.cap(a) > 0 for a in accounts)}"
+        unknown = sum(status in ("unknown", "auth") for status, _, _ in statuses)
+        next_checks = [reset for status, _, reset in statuses if status == "quota"]
+        if unknown or not next_checks:
+            next_checks.append(now + POOL_REFRESH)
+        text = f"Пул Codex · доступны {ready} из {len(statuses)}"
+        if unknown:
+            text += f" · требуют проверки {unknown}"
         return {"pool_label": text, "reached": None if ready else "pool",
-                "pool_reset": max(now + 1, min(quota_resets, default=now + POOL_REFRESH))}
+                "pool_reset": now + 1 if ready else max(now + 1, min(next_checks))}
     if LIMITS_CACHE["data"] and time.time() - LIMITS_CACHE["at"] < max_age:
         return LIMITS_CACHE["data"]
     try:
@@ -1407,8 +1412,13 @@ async def pause_for_limit(item, partial=""):
     STATE["fallback_until"] = max(STATE.get("fallback_until", 0), reset)
     save_state()
     if not item["background"] or item.get("incident"):
-        await notify(f"{E('stop')} **Лимит Codex кончился посреди задачи.** Продолжу её сам после сброса "
-                     f"({until(reset)}). Пока новые задачи делаю на быстрой модели Mercury ⚡."
+        if "pool_reset" in L:
+            message = (f"{E('stop')} **Codex отклонил задачу из-за лимита.** Проверю пул {until(reset)} "
+                       "и продолжу, как только подтвержу доступную квоту.")
+        else:
+            message = (f"{E('stop')} **Лимит Codex кончился посреди задачи.** "
+                       f"Продолжу её сам после сброса ({until(reset)}).")
+        await notify(message + " Пока новые задачи делаю на быстрой модели Mercury ⚡."
                      + (f"\n\n*Успел:* {partial[-800:]}" if partial else ""),
                      markup=kb((btn("Лимиты", "limits!", "limits"), btn("Меню", "menu", "home"))), kind="limit")
 
@@ -1442,11 +1452,13 @@ async def resume_loop():
                                                      images=[i for i in it.get("images", []) if os.path.exists(i)],
                                                      incident=it.get("incident"), show_progress=not it["background"],
                                                      resumed=True))
-                else:  # ещё не сбросился — проверим через 10 минут
+                else:
+                    now = time.time()
+                    next_check = max(now + POOL_REFRESH, (L or {}).get("pool_reset", now + 600))
                     for it in q:
-                        it["reset"] = time.time() + 600
+                        it["reset"] = next_check
                     if fb:
-                        STATE["fallback_until"] = time.time() + 600
+                        STATE["fallback_until"] = next_check
                     save_state()
         except Exception:
             log.exception("resume loop failed")
@@ -1503,7 +1515,8 @@ async def run_task(lane: Lane, prompt, *, thread_id=None, images=(), title=E("bu
             STATE["main_thread"] = tid
             STATE["main_at"] = time.time()
             save_state()
-        if err and engine == "codex" and LIMIT_RE.search(err) and not run.cancelled and not report_success:
+        quota_error = POOL_QUOTA_ERROR if active_codex_pool() else LIMIT_RE
+        if err and engine == "codex" and quota_error.search(err) and not run.cancelled and not report_success:
             if run.effects_possible:
                 err += "\nКоманда могла уже изменить состояние. Проверь результат перед повтором."
             else:
