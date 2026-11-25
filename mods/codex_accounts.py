@@ -18,17 +18,27 @@ def account_id(account):
 
 
 async def cli(*args, json_output=True):
-    proc = await asyncio.create_subprocess_exec(
+    launch = asyncio.create_task(asyncio.create_subprocess_exec(
         shutil.which('codex-auth') or str(Path.home()/'.npm-global/bin/codex-auth'), *args,
-        start_new_session=True, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        start_new_session=True, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE))
+    proc = None
     try:
+        # Keep the process handle even if cancellation arrives while asyncio
+        # is still registering pipes for an already running wrapper.
+        proc = await asyncio.shield(launch)
         out, _ = await asyncio.wait_for(proc.communicate(), 30)
     except BaseException:
-        try:
-            os.killpg(proc.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        await proc.communicate()
+        if proc is None:
+            try:
+                proc = await launch
+            except Exception:
+                pass
+        if proc is not None:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            await proc.communicate()
         raise
     if proc.returncode:
         raise RuntimeError('codex-auth command failed')

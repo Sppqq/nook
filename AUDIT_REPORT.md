@@ -56,6 +56,8 @@ durable queue empty.
 - Same-account quota sampling and turn execution are mutually exclusive
   inside Nook. Manual credential changes wait for pool I/O. External Codex
   commands run outside that coordination.
+- Cancellation during process startup waits for the CLI process handle
+  before terminating its process group and restoring credentials.
 - Device sign-in imports credentials into the account registry only after
   installing a validated login, under the same lock. It preserves other
   providers' conversations. A failed or cancelled manual switch restores

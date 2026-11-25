@@ -109,7 +109,16 @@ class AccountTests(unittest.IsolatedAsyncioTestCase):
         )
         helper.chmod(0o700)
         group = None
-        with patch.object(self.mod.shutil, 'which', return_value=str(helper)):
+        handle_ready = asyncio.Event()
+        spawn = asyncio.create_subprocess_exec
+
+        async def delayed_spawn(*args, **kwargs):
+            process = await spawn(*args, **kwargs)
+            await handle_ready.wait()
+            return process
+
+        with (patch.object(self.mod.shutil, 'which', return_value=str(helper)),
+              patch.object(self.mod.asyncio, 'create_subprocess_exec', delayed_spawn)):
             task = asyncio.create_task(self.real_cli('switch'))
             try:
                 async with asyncio.timeout(3):
@@ -117,6 +126,8 @@ class AccountTests(unittest.IsolatedAsyncioTestCase):
                         await asyncio.sleep(0.01)
                 group, child = map(int, (self.home / 'ready').read_text().split())
                 task.cancel()
+                await asyncio.sleep(0)
+                handle_ready.set()
                 with self.assertRaises(asyncio.CancelledError):
                     await asyncio.wait_for(asyncio.shield(task), 3)
                 child_status = Path(f'/proc/{child}/status')
@@ -132,6 +143,7 @@ class AccountTests(unittest.IsolatedAsyncioTestCase):
                         await asyncio.sleep(0.01)
                 group = None
             finally:
+                handle_ready.set()
                 if group is not None:
                     try:
                         os.killpg(group, signal.SIGKILL)

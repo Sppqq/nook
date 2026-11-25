@@ -15,7 +15,7 @@
   that preference. Complete localization of the remaining Telegram
   views, operational notifications, and installer.
 
-- Current local line coverage is 29.4% for `bot.py`, 87.8% for the pool,
+- Current local line coverage is 31.7% for `bot.py`, 87.5% for the pool,
   74.7% for the updater and 62.4% for legacy migration. Focus on the queue, Telegram entry points,
   and recovery branches to close the core coverage gap.
 

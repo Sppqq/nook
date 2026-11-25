@@ -1,5 +1,12 @@
 # Modernization log
 
+## Iteration 21 — close the Codex CLI startup cancellation race
+
+- Keep the process handle when cancellation arrives during startup. Stop
+  the CLI and its descendants before account recovery proceeds.
+- Exercise the race by cancelling while a real child is already running
+  and the wrapper's process handle has not reached the caller.
+
 ## Iteration 20 — localize more of the owner workflow
 
 - Translate server status, model choice and fallback, the task list and
