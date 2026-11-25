@@ -3,6 +3,7 @@ import ctypes
 import hashlib
 import json
 from pathlib import Path
+import shutil
 import sys
 import tempfile
 import unittest
@@ -95,6 +96,17 @@ class LegacyMigrationPlannerTests(unittest.TestCase):
         with self.assertRaisesRegex(migration.MigrationError, 'Эталон'):
             migration.plan_source_migration(
                 self.home, self.old, self.new, old_revision=migration.LEGACY_COMMITS['0.1.1'])
+
+    def test_snapshot_comparison_detects_changes_to_existing_directory_permissions(self):
+        stage = self.root / 'prepared'
+        shutil.copytree(self.home, stage)
+        (stage / 'mods/new').mkdir()
+        (stage / 'mods/new/upstream.py').write_text('VALUE = 1')
+        changed = {'mods/new/upstream.py'}
+        self.assertTrue(migration._matches_snapshot_excluding_stage_changes(self.home, stage, changed))
+        original = (self.home / 'mods').stat().st_mode & 0o777
+        (stage / 'mods').chmod(original ^ 0o020)
+        self.assertFalse(migration._matches_snapshot_excluding_stage_changes(self.home, stage, changed))
 
     def test_provisional_startup_requires_a_commit_for_the_same_tree(self):
         self.assertFalse(migration.startup_held(self.home))

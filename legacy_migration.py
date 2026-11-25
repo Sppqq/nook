@@ -641,15 +641,14 @@ def _inventory_digest(inventory):
 def _matches_snapshot_excluding_stage_changes(snapshot, stage, changed):
     baseline, candidate = _inventory(snapshot), _inventory(stage)
     changed = set(changed) | {nook_update.STATE, CUTOVER_MARKER}
-    changed_dirs = {str(PurePosixPath(name).parent) for name in changed}
+    changed_dirs = {parent.as_posix() for name in changed
+                    for parent in PurePosixPath(name).parents}
     paths = set(baseline) | set(candidate)
     for name in paths:
         if name == '.venv' or name.startswith('.venv/') or name in changed:
             continue
-        if name in changed_dirs:
-            continue
-        if (baseline.get(name, candidate.get(name, {})).get('kind') == 'dir'
-                and any(path.startswith(name + '/') for path in changed)):
+        if (name in changed_dirs and name not in baseline
+                and candidate.get(name, {}).get('kind') == 'dir'):
             continue
         if baseline.get(name) != candidate.get(name):
             return False
