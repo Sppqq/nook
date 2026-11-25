@@ -1,5 +1,12 @@
 # Modernization log
 
+## Iteration 22 — verify the release archive and document the upgrade path
+
+- Require disposable systemd migration and rollback checks before the
+  Verified release workflow hands off an archive for review or attestation.
+- Document the Telegram paths for current and v0.1.1 installs and the signed
+  SSH bridge for v0.1.0 in both languages.
+
 ## Iteration 21 — close the Codex CLI startup cancellation race
 
 - Keep the process handle when cancellation arrives during startup. Stop

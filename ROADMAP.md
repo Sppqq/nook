@@ -2,6 +2,11 @@
 
 ## Current work
 
+- Run the legacy migration and rollback fixtures on the exact archive
+  prepared by the release workflow. Document upgrade entry points by
+  installed version in both languages. Keep live VPS checks and independent
+  review as separate promotion criteria.
+
 - Pool credential and retry guards cover concurrent quota probes, manual
   account changes, malformed streams, partial replies, and mismatched
   session IDs. Manual switch cancellation restores the prior login and

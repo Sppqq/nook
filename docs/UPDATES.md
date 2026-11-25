@@ -2,6 +2,24 @@
 
 ## По-русски
 
+### Как обновить существующего бота
+
+- **Есть меню «Обновления и резервные копии».** Открой **Ещё → Моды →
+  Обновления и резервные копии → Проверить обновления**. Проверь версию и
+  нажми **Установить с резервной копией**. Версия выбирается из твоего канала
+  и с учётом закрепления. Если канал ещё не выбран, можно сохранить режим
+  `main` и обновляться через **Обновить Nook**.
+- **Исходная v0.1.1.** Открой **Ещё → Моды → Обновить Nook**. Эта кнопка
+  загружает совместимый код из `main`. Если появится сообщение о
+  несовместимых зависимостях, используй подписанный переход по SSH ниже.
+- **Исходная v0.1.0.** В ней ещё нет кнопки. Один раз выполни подписанный
+  переход по SSH по инструкции ниже. Дальше обновляйся через Telegram.
+- **PM2, Docker и частный Домовой.** Сначала нужна миграция конкретной
+  установки с проверкой её службы, данных и местных доработок.
+
+Актуальные версии видны в [GitHub Releases](https://github.com/Sppqq/nook/releases).
+Публикация кандидата и выбор канала владельцем происходят отдельно.
+
 Открой **Ещё → Моды → Обновления и резервные копии** для выбора канала, просмотра доступных релизов, закрепления версии, паузы и настроек уведомлений. **Ещё → Моды → Обновить Nook** показывает проверенный план обновления. При первой установке Nook загружает последний допустимый опубликованный релиз выбранного канала (по умолчанию Stable). `bootstrap.sh --version X` устанавливает и закрепляет опубликованную версию `X`, а `--dev` явно выбирает ветку разработки. У старых установок без сохранённого канала режим `main` сохраняется до выбора владельца.
 
 Доступны Stable, Release Candidate, Beta, Alpha и Nightly. Stable принимает только стабильные версии; менее стабильные каналы включают все более стабильные версии. При downgrade Nook показывает отдельное предупреждение и требует дополнительного подтверждения. Выбор канала сам по себе ничего не устанавливает.
@@ -60,13 +78,16 @@ VCS требуют ручного согласования. Версии пол�
 обновлятор `v0.1.1` используй миграцию из SSH. Она поддерживает точные публичные версии
 `v0.1.0` и `v0.1.1`.
 
-На Linux под владельцем пользовательской службы дождись завершения задач и
-отмени запросы старого обновлятора. Из каталога вне инстанса запусти
-`bootstrap.sh` из доверенного источника, указав **точную опубликованную**
-версию с аттестацией Nook:
+В интерактивном SSH под владельцем службы дождись завершения задач и отмени
+запросы старого обновлятора. Сохрани официальный загрузчик в отдельную
+временную папку. Укажи фактический абсолютный путь к установленному боту и
+**точную опубликованную** версию с аттестацией Nook из GitHub Releases.
+Например, для штатной папки `~/nook` и опубликованной Alpha 1:
 
 ```bash
-bash /path/to/bootstrap.sh --migrate --home "$HOME/nook" --version X.Y.Z --yes
+stage="$(mktemp -d)"
+curl -fsSL https://raw.githubusercontent.com/Sppqq/nook/main/bootstrap.sh -o "$stage/bootstrap.sh" &&
+  bash "$stage/bootstrap.sh" --migrate --home "$HOME/nook" --version 0.1.2-alpha.1 --yes
 ```
 
 Нужны пользовательский systemd, Python 3.11+ с `venv`, GitHub CLI с
@@ -144,6 +165,24 @@ systemctl --user start nook.service
 воспользуйся офлайн-откатом и проверенным архивом.
 
 ## English
+
+### Upgrade an existing bot
+
+- **Updates and backups is available.** Open **More → Mods → Updates and
+  backups → Check for updates**, review the version, then select **Install
+  with backup**. Nook follows the selected channel and version pin. If you
+  still follow `main`, use **Update Nook** to retain that mode.
+- **Original v0.1.1.** Use **More → Mods → Обновить Nook** for compatible
+  code from `main`. If the original updater reports incompatible
+  dependencies, use the signed SSH migration.
+- **Original v0.1.0.** Use the one-time signed SSH migration. Its original
+  Telegram menu predates the updater.
+- **PM2, Docker and private Domovoy builds.** These need an installation-specific
+  migration that accounts for the service, data and local changes.
+
+Choose an exact published version from [GitHub Releases](https://github.com/Sppqq/nook/releases)
+for SSH migration. Use the command above in an interactive SSH session
+under the service owner and substitute the actual installation directory.
 
 Open **More → Mods → Updates and backups** to select a channel, review releases, pin a version and configure checks. The installer fetches the newest eligible published release for the selected channel. `bootstrap.sh --version X` installs and pins exact published version `X`. Use `--dev` for a development installation. Release installs and updates require a current GitHub CLI (`gh`) for Sigstore verification without login. Confirm updates separately from the installer.
 

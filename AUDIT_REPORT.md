@@ -31,6 +31,12 @@ predates the updater button, so the supported entry point is the signed
 bootstrap over SSH. Keep the real Telegram and published-release run in the
 pre-promotion checklist.
 
+The release preparation workflow exercises the same isolated user-systemd
+fixtures against the archive it uploads for review or passes to attestation.
+This includes the v0.1.1 Telegram button, the v0.1.0 SSH bridge, dependency
+updates and rollback. These fixtures use simulated Telegram and release
+inputs.
+
 A local Bubblewrap test validates the opted-in port of a data-only function,
 its activation and rollback and the preservation of its legacy data.
 Approval is simulated in that test. Compare behavior with the owner's real

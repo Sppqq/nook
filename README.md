@@ -75,7 +75,9 @@ We have not run all three projects under the same workload. The process snapshot
 
 ## Update without reinstalling
 
-Open **More → Mods → Update Nook** (Russian: **Ещё → Моды → Обновить Nook**) to check GitHub and confirm an update. Nook preserves your configuration, memory, conversations, keys, and custom extensions. Conflicting local source changes stop the update. A separate supervisor waits for current tasks, restarts the bot, checks startup and rolls back if it fails.
+For a managed release, open **More → Mods → Updates and backups → Check for updates**, review the version, and select **Install with backup**. Nook preserves your configuration, memory, conversations, keys, and custom extensions. Conflicting local source changes stop the update. A separate supervisor waits for current tasks, restarts the bot, checks startup and rolls back if it fails.
+
+Original v0.1.1 installations use **More → Mods → Обновить Nook** for compatible updates from `main`. Original v0.1.0 installations need the one-time signed SSH migration. See the [upgrade guide](docs/UPDATES.md#upgrade-an-existing-bot).
 
 The Nightly candidate supports signed compatible Python dependency changes. It prepares a new environment and verifies a full local backup before switching. Data-format changes require their own migration.
 
