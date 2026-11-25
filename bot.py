@@ -1236,9 +1236,10 @@ async def get_limits(max_age=60):
         next_checks = [reset for status, _, reset in statuses if status == "quota"]
         if unknown or not next_checks:
             next_checks.append(now + POOL_REFRESH)
-        text = f"Пул Codex · доступны {ready} из {len(statuses)}"
+        text = ui_text(f"Пул Codex · доступны {ready} из {len(statuses)}",
+                       f"Codex pool · {ready} of {len(statuses)} available")
         if unknown:
-            text += f" · требуют проверки {unknown}"
+            text += ui_text(f" · требуют проверки {unknown}", f" · {unknown} awaiting verification")
         return {"pool_label": text, "reached": None if ready else "pool",
                 "pool_reset": now + 1 if ready else max(now + 1, min(next_checks))}
     if LIMITS_CACHE["data"] and time.time() - LIMITS_CACHE["at"] < max_age:
@@ -1264,13 +1265,15 @@ def win_name(mins, *, english=False):
     return f"{mins} {'min' if english else 'мин'}"
 
 
-def until(ts):
+def until(ts, *, english=False):
     s = max(0, int(ts - time.time()))
     d, h, m = s // 86400, s % 86400 // 3600, s % 3600 // 60
-    left = f"{d} д {h} ч" if d else f"{h} ч {m} мин" if h else f"{m} мин"
+    day_unit, hour_unit, minute_unit = ("d", "h", "min") if english else ("д", "ч", "мин")
+    left = (f"{d} {day_unit} {h} {hour_unit}" if d else
+            f"{h} {hour_unit} {m} {minute_unit}" if h else f"{m} {minute_unit}")
     when = dt.datetime.fromtimestamp(ts)
     day = "" if when.date() == dt.date.today() else when.strftime("%d.%m ")
-    return f"через {left} ({day}{when:%H:%M})"
+    return f"{'in' if english else 'через'} {left} ({day}{when:%H:%M})"
 
 
 def bar(pct, n=10):
@@ -1280,29 +1283,35 @@ def bar(pct, n=10):
 
 def fmt_limits(L):
     if not L:
-        return f"{E('err')} Не смог узнать лимиты Codex (нет ответа от app-server и нет логов сессий)."
+        message = ui_text("Не смог узнать лимиты Codex (нет ответа от app-server и нет логов сессий).",
+                          "Codex quota is unavailable (no app-server response or session logs).")
+        return f"{E('err')} {message}"
     if "pool_label" in L:
         return f"{E('limits')} **{L['pool_label']}**"
-    lines = [f"{E('limits')} **Лимиты Codex**" + (f" · {L['plan']}" if L.get("plan") else "")]
+    label = ui_text("Лимиты Codex", "Codex quota")
+    english = ui_text(False, True)
+    lines = [f"{E('limits')} **{label}**" + (f" · {L['plan']}" if L.get("plan") else "")]
     for key in ("primary", "secondary"):
         w = L.get(key)
         if not w:
             continue
         icon = "🟥" if w["used"] >= 90 else "🟨" if w["used"] >= 70 else "🟩"
-        lines.append(f"{icon} {win_name(w['mins'])}: {bar(w['used'])} **{w['used']:.0f}%**\n"
-                     f"     сброс {until(w['reset'])}")
+        lines.append(f"{icon} {win_name(w['mins'], english=english)}: {bar(w['used'])} **{w['used']:.0f}%**\n"
+                     f"     {ui_text('сброс', 'resets')} {until(w['reset'], english=english)}")
     c = L.get("credits") or {}
+    credits = ui_text("кредиты", "credits")
     if c.get("unlimited"):
-        lines.append(f"{E('credits')} кредиты: безлимит")
+        lines.append(f"{E('credits')} {credits}: {ui_text('безлимит', 'unlimited')}")
     elif c.get("has_credits") or c.get("hasCredits"):
-        lines.append(f"{E('credits')} кредиты: {float(c.get('balance') or 0):.0f}")
+        lines.append(f"{E('credits')} {credits}: {float(c.get('balance') or 0):.0f}")
     if L.get("resets_avail"):
-        lines.append(f"{E('gift')} бесплатных сбросов лимита: {L['resets_avail']}")
+        lines.append(f"{E('gift')} {ui_text('бесплатных сбросов лимита', 'free quota resets')}: {L['resets_avail']}")
     if L.get("reached"):
-        lines.append(f"{E('stop')} лимит исчерпан ({L['reached']})")
+        lines.append(f"{E('stop')} {ui_text('лимит исчерпан', 'quota exhausted')} ({L['reached']})")
     if not L.get("live"):
         ago = int(time.time() - L["at"]) // 60
-        lines.append(f"*(по последнему запуску, {ago} мин назад)*")
+        lines.append(ui_text(f"*(по последнему запуску, {ago} мин назад)*",
+                             f"*(last session, {ago} min ago)*"))
     return "\n".join(lines)
 
 
@@ -1321,7 +1330,7 @@ async def limits_note(engine=None, antigravity_model=None):
         return ""
     if not L or not any(w and w["used"] >= 70 for w in (L.get("primary"), L.get("secondary"))):
         return ""
-    return f"\n\n*{E('limits')} лимит Codex: {limits_short(L)}*"
+    return f"\n\n*{E('limits')} {ui_text('лимит Codex', 'Codex quota')}: {limits_short(L)}*"
 
 
 def limits_short(L):
@@ -1329,7 +1338,9 @@ def limits_short(L):
         return ""
     if "pool_label" in L:
         return L["pool_label"]
-    parts = [f"{win_name(w['mins'])} {w['used']:.0f}%" for w in (L.get("primary"), L.get("secondary")) if w]
+    english = ui_text(False, True)
+    parts = [f"{win_name(w['mins'], english=english)} {w['used']:.0f}%"
+             for w in (L.get("primary"), L.get("secondary")) if w]
     return " · ".join(parts)
 
 
@@ -1416,17 +1427,23 @@ async def pause_for_limit(item, partial=""):
     STATE["fallback_until"] = max(STATE.get("fallback_until", 0), reset)
     save_state()
     if not item["background"] or item.get("incident"):
+        eta = until(reset, english=ui_text(False, True))
         if "pool_reset" in L:
-            message = (f"{E('stop')} **Codex отклонил задачу из-за лимита.** Проверю пул {until(reset)} "
-                       "и продолжу, как только подтвержу доступную квоту.")
+            message = ui_text(f"**Codex отклонил задачу из-за лимита.** Проверю пул {eta} "
+                              "и продолжу, как только подтвержу доступную квоту.",
+                              f"**Codex hit a usage limit.** I'll check the pool {eta} "
+                              "and resume as soon as I can confirm available quota.")
         else:
-            message = (f"{E('stop')} **Лимит Codex кончился посреди задачи.** "
-                       f"Продолжу её сам после сброса ({until(reset)}).")
+            message = ui_text(f"**Лимит Codex кончился посреди задачи.** Продолжу её сам после сброса ({eta}).",
+                              f"**Codex hit a usage limit mid-task.** I'll resume after the reset ({eta}).")
         if fallback_active():
-            message += " Пока новые задачи делаю на быстрой модели Mercury ⚡."
-        await notify(message
-                     + (f"\n\n*Успел:* {partial[-800:]}" if partial else ""),
-                     markup=kb((btn("Лимиты", "limits!", "limits"), btn("Меню", "menu", "home"))), kind="limit")
+            message += ui_text(" Пока новые задачи делаю на быстрой модели Mercury ⚡.",
+                               " New tasks run on Mercury for now ⚡.")
+        if partial:
+            message += f"\n\n*{ui_text('Успел', 'Progress so far')}:* {partial[-800:]}"
+        await notify(f"{E('stop')} {message}",
+                     markup=kb((btn(ui_text("Лимиты", "Limits"), "limits!", "limits"),
+                                btn(ui_text("Меню", "Menu"), "menu", "home"))), kind="limit")
 
 
 async def resume_loop():
@@ -1445,8 +1462,10 @@ async def resume_loop():
                     items, STATE["paused"] = list(q), []
                     save_state()
                     if was_fb:
-                        digest("Квота Codex доступна"
-                               + (f" · к продолжению: {len(items)}" if items else ""))
+                        message = ui_text("Квота Codex доступна", "Codex quota is available")
+                        if items:
+                            message += ui_text(f" · к продолжению: {len(items)}", f" · {len(items)} to resume")
+                        digest(message)
                     for it in items:
                         lane = user_lane if it["lane"] == "user" else bg_lane
                         prompt = ("[АВТОПРОДОЛЖЕНИЕ] Квота Codex снова доступна. Продолжи прерванную задачу с того места, "
@@ -1779,9 +1798,9 @@ async def view_limits():
     model, _ = current_model()
     parts = (agy_text, codex_text) if is_antigravity_model(model) else (codex_text, agy_text)
     text = "\n\n".join(parts)
-    rows = [(btn("Обновить", "limits!", "refresh"),)]
+    rows = [(btn(ui_text("Обновить", "Refresh"), "limits!", "refresh"),)]
     if "codex_pool" in REG.mods:
-        rows.append((btn("Пул Codex", "mod:codex_pool:open", "chatgpt"),))
+        rows.append((btn(ui_text("Пул Codex", "Codex pool"), "mod:codex_pool:open", "chatgpt"),))
     return text, kb(*rows, back())
 
 

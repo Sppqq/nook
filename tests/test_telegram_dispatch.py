@@ -195,6 +195,23 @@ else:
         self.runtime["mercury_key"].return_value = "fixture-only"
         self.assertEqual(self.runtime["engine_for"](), "mercury")
 
+        self.runtime["post"] = AsyncMock(return_value=60)
+        self.runtime["delete_msgs"] = AsyncMock()
+        await self.dispatch("custom:language:en")
+        self.runtime["STATE"]["paused"].clear()
+        await self.runtime["pause_for_limit"](dict(paused), partial="fixture progress")
+        paused = self.runtime["STATE"]["paused"][0]
+        notice = self.runtime["notify"].await_args
+        self.assertIn("check the pool in ", notice.args[0])
+        self.assertIn("New tasks run on Mercury", notice.args[0])
+        self.assertIn("Progress so far", notice.args[0])
+        self.assertEqual(
+            [(button.text, button.callback_data) for button in notice.kwargs["markup"].inline_keyboard[0]],
+            [("Limits", "limits!"), ("Menu", "menu")],
+        )
+        unverified = await self.runtime["get_limits"](0)
+        self.assertEqual(unverified["pool_label"], "Codex pool · 0 of 2 available · 1 awaiting verification")
+
         async def available(env):
             account = (Path(env["CODEX_HOME"]) / "auth.json").read_text()
             return limits(account, 5 if account == "primary" else 100, reset)
@@ -227,7 +244,7 @@ else:
         self.assertTrue(run_task.await_args.kwargs["resumed"])
         self.assertEqual(self.runtime["STATE"]["paused"], [])
         self.assertEqual(self.runtime["STATE"]["fallback_until"], 0)
-        self.assertIn("к продолжению: 1", digest.call_args.args[0])
+        self.assertEqual(digest.call_args.args[0], "Codex quota is available · 1 to resume")
 
     async def test_pool_pauses_only_on_recognized_quota_error(self):
         from test_codex_pool import fake_accounts
@@ -304,11 +321,23 @@ else:
         await self.dispatch(f"mod:codex_pool:cap:{account.ident},95")
         self.assertEqual(pool.settings["caps"][account.ident], 95)
         self.assertEqual(registry.core.edit.await_args.args[2], "Budget saved.")
+        sample = {
+            "secondary": {"used": 96, "mins": 10080, "reset": time.time() + 3600},
+            "plan": "plus", "live": True, "credits": {"unlimited": True},
+        }
+        runtime["get_limits"] = AsyncMock(return_value=sample)
+        quota = runtime["fmt_limits"](sample)
+        self.assertIn("Codex quota", quota)
+        self.assertIn("Week:", quota)
+        self.assertIn("resets in", quota)
+        self.assertIn("credits: unlimited", quota)
+        self.assertIn("Week 96%", await runtime["limits_note"]("codex"))
 
         await self.dispatch('custom:preset:minimal')
         self.assertEqual(read_json(Path(runtime['STATE_PATH']))['ui_language'], 'en')
         await self.dispatch('custom:language:ru')
         self.assertEqual(read_json(Path(runtime['STATE_PATH']))['ui_language'], 'ru')
+        self.assertIn("Лимиты Codex", runtime["fmt_limits"](sample))
         await self.dispatch('mod:update_manager:open_menu')
         self.assertIn('Существующий режим (main)', registry.core.send.await_args.args[1])
 

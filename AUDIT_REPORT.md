@@ -27,7 +27,10 @@ callbacks, verifies persistence through layout presets, and checks that
 changing the language leaves legacy update mode and automatic update settings
 unchanged. Release approvals and downgrade callbacks use the same identifiers
 in both languages. The dispatcher exercises English pool strategy selection,
-quota details and the existing account budget callbacks.
+quota details and the existing account budget callbacks. The pause notice
+explains the distinction between an unavailable quota sample and a confirmed
+reset time. The recovery test checks the notice and verifies that the
+resume call uses the original thread after finding an eligible account.
 
 ## Current Codex pool audit
 

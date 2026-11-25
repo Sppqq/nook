@@ -1,5 +1,12 @@
 # Modernization log
 
+## Iteration 16 — localize Codex quota and recovery notices
+
+- Use the owner's saved language for the Codex quota panel, low-quota footer,
+  pool availability, and pause and resume notices. The Telegram dispatch test
+  exercises an unavailable pool account, optional Mercury fallback, and
+  the original thread's recovery after a quota check.
+
 ## Iteration 15 — verify the exact v0.1.1 update path
 
 - Exercise the historical menu check and confirmation, pinned main archive,
