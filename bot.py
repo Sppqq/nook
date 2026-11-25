@@ -4802,10 +4802,11 @@ async def set_commands():
         log.warning("delete_my_commands failed: %s", e)
 
 
-async def mods_reload():
-    r = REG.reload()
+async def mods_reload(*, start_tasks=True):
+    r = REG.reload(start_tasks=start_tasks)
     save_json(modsys.RESULT_PATH, r)
-    await set_commands()
+    if start_tasks:
+        await set_commands()
     log.info("mods reloaded: %s, failed: %s", r["loaded"], list(r["failed"]))
     return r
 
@@ -5221,11 +5222,24 @@ async def main():
 
 
 async def run_main():
+    from legacy_migration import startup_held
+    from nook_update import heartbeat
+
+    home = Path(HOME)
     for d in (OUTBOX, INBOX):
         os.makedirs(d, exist_ok=True)
     os.makedirs(modsys.SPOOL, exist_ok=True)
-    await mods_reload()
+    held = startup_held(home)
+    await mods_reload(start_tasks=not held)
     me = await bot.get_me()
+    if held:
+        # Let the external supervisor verify the candidate before polling
+        # Telegram or allowing background tasks to claim real work.
+        while startup_held(home):
+            heartbeat(home, REG.failed)
+            await asyncio.sleep(2)
+        REG.start_tasks()
+        await set_commands()
     log.info("started as @%s, owner=%s", me.username, STATE["owner_id"])
     if not STATE["owner_id"]:
         log.info("pair with: /start %s", CFG.get("pair_code"))

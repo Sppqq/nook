@@ -29,11 +29,15 @@ def stop(*_):
         (home / 'memory/last-write').write_text(version)
     raise SystemExit(0)
 signal.signal(signal.SIGTERM, stop)
+if 'update_api' in manifest:
+    import legacy_migration
+    import nook_update
+
+    while legacy_migration.startup_held(home):
+        nook_update.heartbeat(home, ['fixture'] if sys.argv[1] == 'rollback' else [])
+        time.sleep(0.25)
 (home / 'memory/started').write_text(version)
 while True:
-    if 'update_api' in manifest:
-        import nook_update
-        nook_update.heartbeat(home, ['fixture'] if sys.argv[1] == 'rollback' else [])
     time.sleep(0.25)
 """
 
@@ -55,6 +59,7 @@ def stage_legacy(base, version, commit):
     for path in home.rglob('*'):
         if path.is_file():
             path.write_bytes(nook_update.rendered(path.read_bytes(), home))
+    run(sys.executable, '-m', 'venv', '--without-pip', str(home / '.venv'))
     (home / 'memory').mkdir()
     (home / 'memory/notes.md').write_text('private fixture')
     if version == '0.1.1':
@@ -82,7 +87,7 @@ def check(base, version, mode, artifact):
     config.mkdir(parents=True, exist_ok=True)
     unit_file = config / unit
     unit_file.write_text(f'[Service]\nWorkingDirectory={home}\n'
-                         f'ExecStart="{sys.executable}" "{service}" {mode}\n')
+                         f'ExecStart="{home / ".venv/bin/python"}" "{service}" {mode}\n')
     try:
         run('systemctl', '--user', 'daemon-reload')
         migration._service_action(unit, 'start')
@@ -91,7 +96,7 @@ def check(base, version, mode, artifact):
         run('timeout', '10', 'bash', '-c', 'until test -s "$1"; do sleep .1; done',
             'nook-fixture', str(home / 'memory/started'))
         backup = base / 'backup'
-        journal = base / 'journal.json'
+        journal = migration._journal_path(home)
         transaction = lambda: migration.migrate_transaction(
             home, source, target, old_revision=commit, target_revision=release['revision'],
             backup=backup, stage=base / 'stage', journal=journal,
@@ -110,6 +115,8 @@ def check(base, version, mode, artifact):
             expected = release['version']
             result = run(str(home / '.venv/bin/pip'), '--version', capture_output=True)
             assert str(home / '.venv') in result.stdout, result.stdout
+        run('timeout', '10', 'bash', '-c', 'until [[ "$(cat "$1")" == "$2" ]]; do sleep .1; done',
+            'nook-fixture', str(home / 'memory/started'), expected)
         assert json.loads((home / 'MANIFEST.json').read_text())['version'] == expected
         assert (home / 'memory/notes.md').read_text() == 'private fixture'
         assert (home / 'memory/last-write').read_text() == version

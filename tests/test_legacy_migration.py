@@ -1,8 +1,6 @@
 """Compatibility-planner tests; never activate a copy or contact a provider."""
 import ctypes
 import hashlib
-
-import nook_update
 import json
 from pathlib import Path
 import sys
@@ -11,6 +9,7 @@ import unittest
 from unittest.mock import patch
 
 import legacy_migration as migration
+import nook_update
 
 
 class LegacyMigrationPlannerTests(unittest.TestCase):
@@ -96,6 +95,22 @@ class LegacyMigrationPlannerTests(unittest.TestCase):
         with self.assertRaisesRegex(migration.MigrationError, 'Эталон'):
             migration.plan_source_migration(
                 self.home, self.old, self.new, old_revision=migration.LEGACY_COMMITS['0.1.1'])
+
+    def test_provisional_startup_requires_a_commit_for_the_same_tree(self):
+        self.assertFalse(migration.startup_held(self.home))
+        marker = self.home / migration.CUTOVER_MARKER
+        marker.parent.mkdir(parents=True)
+        marker.write_text(json.dumps({'hold_startup': True, 'id': 'candidate'}))
+        journal = migration._journal_path(self.home)
+        self.assertTrue(migration.startup_held(self.home))
+        for status, tree in (('health_check', 'candidate'), ('complete', 'different')):
+            journal.write_text(json.dumps({'status': status, 'target_tree_id': tree}))
+            self.assertTrue(migration.startup_held(self.home))
+        journal.write_text(json.dumps({'status': 'complete', 'target_tree_id': 'candidate'}))
+        self.assertFalse(migration.startup_held(self.home))
+        migration._clear_startup_hold(self.home, 'candidate')
+        journal.unlink()
+        self.assertFalse(migration.startup_held(self.home))
 
     def test_plan_updates_code_and_dependencies_without_touching_runtime(self):
         plan = migration.plan_source_migration(
@@ -237,7 +252,8 @@ class LegacyMigrationPlannerTests(unittest.TestCase):
 
         journal = self.root / 'migration.json'
         service = []
-        with patch.object(migration, 'exchange_directories', side_effect=exchange_then_interrupt):
+        with (patch.object(migration, 'exchange_directories', side_effect=exchange_then_interrupt),
+              patch.object(migration, 'recover_transaction', side_effect=OSError('worker gone'))):
             with self.assertRaisesRegex(OSError, 'simulated process loss'):
                 migration.migrate_transaction(
                     self.home, self.old, self.new,
@@ -246,6 +262,8 @@ class LegacyMigrationPlannerTests(unittest.TestCase):
                     journal=journal, stop_service=lambda: service.append('stop'),
                     start_service=lambda: service.append('start'),
                     health_check=lambda *_: True, python=sys.executable)
+        self.assertEqual(json.loads(journal.read_text())['status'], 'ready')
+        self.assertEqual((self.home / 'bot.py').read_text(), self.target_files['bot.py'])
         state = migration.recover_transaction(
             journal, stop_service=lambda: service.append('recover-stop'),
             start_service=lambda: service.append('recover-start'))

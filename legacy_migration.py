@@ -28,6 +28,28 @@ MAX_SOURCE_FILES = 2500
 MAX_FILE_SIZE = 8 * 1024 * 1024
 MAX_TREE_ENTRIES = 50000
 MAX_TREE_BYTES = 2 * 1024 * 1024 * 1024
+CUTOVER_MARKER = 'spool/migrations/legacy-source-plan.json'
+
+
+def _journal_path(home):
+    return home.parent / ('.' + home.name + '.nook-migration.json')
+
+
+def startup_held(home, *, journal=None):
+    # Installed candidates only enter this gate when the supervisor has
+    # explicitly marked their tree as provisional.
+    marker = home / CUTOVER_MARKER
+    try:
+        record = nook_update.read_json(marker)
+    except FileNotFoundError:
+        return False
+    if not record.get('hold_startup'):
+        return False
+    try:
+        state = nook_update.read_json(journal or _journal_path(home))
+    except (OSError, ValueError):
+        return True
+    return state.get('status') != 'complete' or state.get('target_tree_id') != record['id']
 
 
 class MigrationError(Exception):
@@ -353,7 +375,7 @@ def stage_source_tree(home, target_source, plan, stage, *, snapshot=None):
                     target.unlink()
                 continue
             nook_update.atomic(target, after, item['mode'])
-        marker = _safe_target(stage, 'spool/migrations/legacy-source-plan.json')
+        marker = _safe_target(stage, CUTOVER_MARKER)
         if marker.exists():
             raise MigrationError('В staging уже существует файл плана миграции.')
         metadata = marker.parent
@@ -496,17 +518,19 @@ def _requirement_pins_from_freeze(python):
 def _requested_packages(venv):
     venv = Path(venv)
     python = venv / 'bin/python'
-    if not venv.is_dir() or venv.is_symlink() or not python.is_file():
+    if not venv.exists() and not venv.is_symlink():
         return set()
+    if venv.is_symlink() or not venv.is_dir() or not python.is_file():
+        raise MigrationError('Не удалось прочитать существующее виртуальное окружение.')
     try:
         probe = subprocess.run([str(python), '-c',
             'import sysconfig; print(sysconfig.get_paths()["purelib"])'],
             cwd=venv.parent, capture_output=True, text=True, timeout=10)
-        if probe.returncode:
-            return set()
         site = Path(probe.stdout.strip())
+        if probe.returncode or not site.is_dir() or not site.resolve().is_relative_to(venv.resolve()):
+            raise MigrationError('Не удалось определить установленные зависимости старого окружения.')
         result = set()
-        for requested in list(site.glob('*.dist-info/REQUESTED'))[:5000]:
+        for requested in site.glob('*.dist-info/REQUESTED'):
             metadata = requested.parent / 'METADATA'
             if metadata.is_symlink() or not metadata.is_file():
                 continue
@@ -602,13 +626,21 @@ def _check_legacy_queue(home):
         raise MigrationError('Сначала заверши или отмени прежнее обновление Nook.')
 
 
+def _clear_startup_hold(home, tree_id):
+    marker = home / CUTOVER_MARKER
+    record = nook_update.read_json(marker) if marker.is_file() else {}
+    if record.get('id') == tree_id and record.get('hold_startup'):
+        del record['hold_startup']
+        nook_update.json_write(marker, record)
+
+
 def _inventory_digest(inventory):
     return hashlib.sha256(json.dumps(inventory, sort_keys=True).encode()).hexdigest()
 
 
 def _matches_snapshot_excluding_stage_changes(snapshot, stage, changed):
     baseline, candidate = _inventory(snapshot), _inventory(stage)
-    changed = set(changed) | {'.nook-install.json', 'spool/migrations/legacy-source-plan.json'}
+    changed = set(changed) | {nook_update.STATE, CUTOVER_MARKER}
     changed_dirs = {str(PurePosixPath(name).parent) for name in changed}
     paths = set(baseline) | set(candidate)
     for name in paths:
@@ -634,7 +666,10 @@ def recover_transaction(journal, *, stop_service, start_service):
         home, stage, backup = Path(state['home']), Path(state['stage']), Path(state['backup'])
         if state.get('schema') not in (1, 2) or home.parent.resolve() != stage.parent.resolve():
             raise ValueError
-        if state['status'] in ('complete', 'rolled_back'):
+        if state['status'] == 'complete':
+            _clear_startup_hold(home, state['target_tree_id'])
+            return state['status']
+        if state['status'] == 'rolled_back':
             return state['status']
         if state['status'] == 'prepared':
             return 'prepared'
@@ -648,8 +683,8 @@ def recover_transaction(journal, *, stop_service, start_service):
         # The stage marker identifies which side of the exchange is live,
         # including a crash between exchange and the next journal write.
         live_id = state['target_tree_id']
-        live_marker = home / 'spool/migrations/legacy-source-plan.json'
-        stage_marker = stage / 'spool/migrations/legacy-source-plan.json'
+        live_marker = home / CUTOVER_MARKER
+        stage_marker = stage / CUTOVER_MARKER
         live_is_target = live_marker.is_file() and json.loads(live_marker.read_text()).get('id') == live_id
         stage_is_target = stage_marker.is_file() and json.loads(stage_marker.read_text()).get('id') == live_id
         if live_is_target and stage_is_target:
@@ -729,6 +764,8 @@ def migrate_transaction(home, old_source, target_source, *, old_revision, target
         plan = plan_source_migration(home, old_source, target_source, old_revision=old_revision)
         snapshot = create_snapshot(home, backup, min_free_bytes=64 * 1024 * 1024)
         record = stage_source_tree(home, target_source, plan, stage, snapshot=backup)
+        record['hold_startup'] = True
+        nook_update.json_write(stage / CUTOVER_MARKER, record)
         (build / '.venv').rename(stage / '.venv')
         installed_manifest = _source_manifest(target_source)
         managed = {name for name in installed_manifest['sha256'] if nook_update.managed(name)}
@@ -755,6 +792,7 @@ def migrate_transaction(home, old_source, target_source, *, old_revision, target
             raise MigrationError('Новая версия не прошла проверку запуска; выполняется откат.')
         state['status'] = 'complete'
         _write_journal(journal, state)
+        _clear_startup_hold(home, record['id'])
         return state
     except BaseException:
         if journal.exists():
@@ -873,7 +911,7 @@ def cli(argv=None):
     if args.action == 'migrate' and not args.target_version:
         parser.error('Для миграции укажи --target-version из опубликованных релизов.')
     os.umask(0o077)
-    journal = home.parent / ('.' + home.name + '.nook-migration.json')
+    journal = _journal_path(home)
     try:
         with _migration_lock(journal):
             return _run_cli(args, home, journal)

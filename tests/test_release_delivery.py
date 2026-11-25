@@ -36,6 +36,28 @@ class ReleaseDeliveryTests(unittest.TestCase):
         self.assertEqual(fetch.call_args.args[0]['version'], '1.1.0-beta.1')
         self.assertEqual(run.call_args.args[0][1], '/tmp/verified/install.py')
 
+    def test_migration_bootstrap_runs_only_the_verified_supervisor(self):
+        version = '0.1.2-alpha.1'
+        with tempfile.TemporaryDirectory() as name:
+            source = Path(name)
+            supervisor = source / 'legacy_migration.py'
+            supervisor.touch()
+            with (patch('nook_update.list_releases', return_value=[release(version)]),
+                  patch('nook_update.fetch_release_source',
+                        return_value=(source, 'a' * 40)) as fetch,
+                  patch.object(installer.subprocess, 'run') as run):
+                run.return_value.returncode = 0
+                self.assertEqual(installer.migrate_from_release('/legacy home', version), 0)
+                self.assertEqual(fetch.call_args.args[0]['version'], version)
+                self.assertEqual(run.call_args.args[0][1:],
+                                 [str(supervisor), 'migrate', '--home', '/legacy home',
+                                  '--target-version', version])
+                fetch.side_effect = UpdateError('signature rejected')
+                run.reset_mock()
+                with self.assertRaisesRegex(SystemExit, 'signature rejected'):
+                    installer.migrate_from_release('/legacy home', version)
+                run.assert_not_called()
+
     def test_exact_release_infers_channel_and_unsigned_versions_are_unavailable(self):
         version = '1.1.0-beta.1'
         self.assertEqual(installer.choose_channel(version=version), 'beta')

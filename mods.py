@@ -251,7 +251,7 @@ class Registry:
                 t.cancel()
         self.mods = {}
 
-    def reload(self):
+    def reload(self, *, start_tasks=True):
         """Перечитать все моды. Возвращает {"loaded": [...], "failed": {name: err}, "disabled": [...]}."""
         self.stop_all()
         self.failed = {}
@@ -270,12 +270,16 @@ class Registry:
             except Exception:
                 self.failed[name] = traceback.format_exc(limit=3)[-1200:]
                 log.error("mod %s failed to load: %s", name, self.failed[name])
+        if start_tasks:
+            self.start_tasks()
+        return {"loaded": sorted(self.mods), "failed": self.failed, "disabled": sorted(disabled & set(mod_files()))}
+
+    def start_tasks(self):
         for m in self.mods.values():
             for fn in m.startup:
                 m.tasks.append(asyncio.create_task(m.call(fn, None, "on_start")))
             for secs, fn in m.periodic:
                 m.tasks.append(asyncio.create_task(self._loop(m, secs, fn)))
-        return {"loaded": sorted(self.mods), "failed": self.failed, "disabled": sorted(disabled & set(mod_files()))}
 
     async def _loop(self, m, secs, fn):
         while True:
