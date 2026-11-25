@@ -27,12 +27,13 @@ home = Path.cwd()
 sys.path.insert(0, str(home))
 manifest = json.loads((home / 'MANIFEST.json').read_text())
 version = manifest['version']
+is_legacy = version in ('0.1.0', '0.1.1')
 def stop(*_):
-    if version in ('0.1.0', '0.1.1'):
+    if is_legacy:
         (home / 'memory/last-write').write_text(version)
     raise SystemExit(0)
 signal.signal(signal.SIGTERM, stop)
-if 'update_api' in manifest:
+if not is_legacy:
     import legacy_migration
     import nook_update
 
