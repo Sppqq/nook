@@ -15,7 +15,13 @@ Nook is an autonomous server administration assistant, intended for the owner of
 
 The root helper is optional and installed separately. Treat installation of this helper as granting the bot account **full root access**. Its sudoers policy allows specified maintenance commands without a password; the account also controls the approval spool. Other root requests are sent to Telegram for approval; temporary full-access mode bypasses individual approvals.
 
-The request spool is controlled by the bot's Linux user. This approval flow is not a security boundary against an attacker who has already compromised that account. Avoid installing the helper unless you understand and accept that trust model.
+The request spool is controlled by the bot's Linux user. The optional
+helper claims each request ID once in a root-owned journal before executing
+it. A missing result after that point still requires operator review. The
+journal prevents duplicate consumption of one ID, and approval continues
+to trust the Linux account controlling the request spool. Existing
+installed helpers receive changes through a separate owner-administered
+installation.
 
 ## Credentials and public reports
 
@@ -25,7 +31,12 @@ Checksums check integrity, not the identity of a download source. Inspect instal
 
 ## Source updates
 
-The optional source updater trusts this GitHub repository over HTTPS and validates its integrity manifest; the manifest is not an independent signature. It preserves runtime data and policy/provider configuration, refuses conflicting local edits and incompatible updates, and backs up affected source files. Its independent supervisor checks startup and can restore code. This does not replace full backups or validate every feature. See [updates and recovery](docs/UPDATES.md). Do not bypass conflicts by resetting local files or replacing the entire installed directory.
+Managed release channels verify the archive and GitHub Actions Sigstore
+provenance. Legacy updates from `main` trust this GitHub repository over
+HTTPS and validate the source manifest. The updater preserves runtime and
+policy/provider configuration, refuses conflicting local edits and
+incompatible updates, and backs up affected source files. See [updates and
+recovery](docs/UPDATES.md) for startup and rollback boundaries.
 
 ## Reporting vulnerabilities
 

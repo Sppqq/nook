@@ -1,0 +1,175 @@
+"""Run actual aiogram dispatch and installed Nook callbacks without Telegram I/O."""
+import importlib.util
+import asyncio
+import json
+import os
+from pathlib import Path
+import shutil
+import tempfile
+import unittest
+from unittest.mock import AsyncMock, patch
+
+from aiogram.types import CallbackQuery, Update
+
+from nook_update import update_settings
+import job_scheduler
+from local_extensions import Store
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+class TelegramDispatchTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        work = tempfile.TemporaryDirectory()
+        self.addCleanup(work.cleanup)
+        self.home = Path(work.name)
+        (self.home / 'config.json').write_text(json.dumps({'bot_token': '123456:' + 'X' * 35, 'owner_id': 7}))
+        bot_path = ROOT / 'bot.py'
+        sandbox = {'__file__': str(bot_path), '__name__': 'disposable_nook'}
+        with patch.dict(os.environ, {'NOOK_HOME': str(self.home)}):
+            exec(compile(bot_path.read_text(), str(bot_path), 'exec'), sandbox)
+        self.runtime = sandbox
+        self.addAsyncCleanup(self.runtime['bot'].session.close)
+        registry = self.runtime['REG']
+        (self.home / 'mods').mkdir()
+        for name in ('update_manager', 'local_extension_ui'):
+            mod_path = self.home / 'mods' / f'{name}.py'
+            shutil.copyfile(ROOT / 'mods' / f'{name}.py', mod_path)
+            spec = importlib.util.spec_from_file_location('disposable_' + name, mod_path)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            instance = self.runtime['modsys'].Mod(name, registry.core)
+            mod.setup(instance)
+            registry.mods[name] = instance
+        registry.core.edit = AsyncMock(return_value=True)
+        registry.core.send = AsyncMock()
+
+    async def dispatch(self, data, sender=7, chat=7, kind='private'):
+        update = Update.model_validate({
+            'update_id': 1, 'callback_query': {
+                'id': 'qa', 'from': {'id': sender, 'is_bot': False, 'first_name': 'Nook QA'},
+                'chat_instance': 'qa', 'data': data, 'message': {
+                    'message_id': 50, 'date': 1700000000, 'chat': {'id': chat, 'type': kind}, 'text': 'Nook',
+                },
+            },
+        })
+        with patch.object(CallbackQuery, 'answer', new_callable=AsyncMock):
+            await self.runtime['dp'].feed_update(self.runtime['bot'], update)
+
+    async def test_owner_channel_confirmation_and_empty_release_list(self):
+        await self.dispatch('mod:update_manager:choose-channel:beta')
+        self.assertIsNone(update_settings(self.home)['channel'])
+        await self.dispatch('mod:update_manager:set-channel:beta')
+        self.assertEqual(update_settings(self.home)['channel'], 'beta')
+        self.assertEqual(update_settings(self.home)['auto_mode'], 'off')
+        with patch('nook_update.list_releases', return_value=[]):
+            await self.dispatch('mod:update_manager:list-releases')
+        self.assertIn('нет опубликованных версий', str(self.runtime['REG'].core.send.call_args))
+        self.assertFalse((self.home / 'spool/updates/request.json').exists())
+
+    async def test_foreign_and_group_callbacks_cannot_change_channel(self):
+        for sender, chat, kind in ((8, 8, 'private'), (7, 8, 'private'), (7, -1007, 'group')):
+            await self.dispatch('mod:update_manager:set-channel:nightly', sender, chat, kind)
+        self.assertIsNone(update_settings(self.home)['channel'])
+        self.runtime['REG'].core.edit.assert_not_awaited()
+
+    async def test_real_mercury_runner_deduplicates_execution_and_saves_session(self):
+        self.runtime['mercury_key'] = lambda: 'fixture'
+        self.runtime['mercury_system'] = lambda: 'fixture system instructions'
+        invocation = {'id': 'same-call', 'type': 'function', 'function': {
+            'name': 'shell', 'arguments': '{"cmd":"printf x >> completed"}',
+        }}
+        reply = {'role': 'assistant', 'tool_calls': [invocation]}
+        provider = AsyncMock(side_effect=[(reply, {}), (reply, {}), ({'role': 'assistant', 'content': 'done'}, {})])
+        self.runtime['mercury_chat'] = provider
+        thread, final, error = await self.runtime['run_mercury']('test', timeout=5)
+        self.assertEqual((final, error), ('done', None))
+        self.assertEqual((self.home / 'completed').read_text(), 'x')
+        self.assertTrue((self.home / 'spool/mercury' / (thread + '.json')).is_file())
+
+    async def test_mercury_provider_wait_cannot_exceed_request_deadline(self):
+        self.runtime['mercury_key'] = lambda: 'fixture'
+        self.runtime['mercury_system'] = lambda: 'fixture system instructions'
+
+        async def stalled(*args):
+            await asyncio.sleep(10)
+
+        self.runtime['mercury_chat'] = stalled
+        _, _, error = await asyncio.wait_for(self.runtime['run_mercury']('test', timeout=0.04), 1)
+        self.assertIn('таймаут', error)
+
+    async def test_scheduled_provider_error_keeps_claim_and_prevents_fallback(self):
+        queue = self.home / 'spool/jobs.json'
+        job_scheduler.write(queue, [{'id': 'task', 'at': 1, 'every': 120, 'prompt': 'check'}])
+        job, = job_scheduler.take_due(queue, now=1)
+        self.runtime['run_agent'] = AsyncMock(return_value=(None, '', 'Codex rate limit'))
+        self.runtime['pause_for_limit'] = AsyncMock()
+        self.runtime['limits_note'] = AsyncMock(return_value='')
+        self.runtime['send'] = AsyncMock(return_value=50)
+        await self.runtime['execute_scheduled'](job)
+        self.runtime['pause_for_limit'].assert_not_awaited()
+        self.assertIn(job['claim_id'], job_scheduler.unresolved(queue))
+        self.assertEqual(job_scheduler.take_due(queue, now=122), [])
+
+    async def test_owner_can_check_activate_and_rollback_a_staged_skill(self):
+        import hashlib
+
+        store = Store(self.home)
+        source = self.home / 'skill.md'
+        source.write_text('fixture skill')
+        store.stage('skill', 'example', '1.0.0', source)
+        version = hashlib.sha256(b'1.0.0').hexdigest()[:12]
+        key = f'skill:example:{version}'
+        await self.dispatch('mod:local_extension_ui:t:' + key)
+        self.assertTrue(store.status('skill', 'example')['versions']['1.0.0']['checked'])
+        with patch('local_extensions.approval', return_value=False):
+            await self.dispatch('mod:local_extension_ui:a:' + key)
+        self.assertIsNone(store.status('skill', 'example')['active'])
+        with patch('local_extensions.approval', return_value=True):
+            await self.dispatch('mod:local_extension_ui:a:' + key, sender=8, chat=8)
+            self.assertIsNone(store.status('skill', 'example')['active'])
+            await self.dispatch('mod:local_extension_ui:a:' + key)
+        self.assertEqual(store.status('skill', 'example')['active'], '1.0.0')
+        await self.dispatch('mod:local_extension_ui:r:skill:example')
+        self.assertIsNone(store.status('skill', 'example')['active'])
+
+    async def test_real_codex_stream_stops_failover_after_tool_activity(self):
+        cli = self.home / 'codex-fixture'
+        cli.write_text("""#!/usr/bin/python3
+import json
+import sys
+prompt = sys.stdin.read()
+print(json.dumps({'type': 'thread.started', 'thread_id': 'codex-fixture'}))
+if prompt == 'after-command':
+    print(json.dumps({'type': 'item.started', 'item': {'type': 'command_execution'}}))
+print(json.dumps({'type': 'turn.failed', 'message': 'usage limit'}))
+""")
+        cli.chmod(0o700)
+        (self.home / 'spool').mkdir()
+        self.runtime['CODEX'] = str(cli)
+        self.runtime['pause_for_limit'] = AsyncMock()
+        self.runtime['limits_note'] = AsyncMock(return_value='')
+        self.runtime['send'] = AsyncMock(return_value=50)
+        await self.runtime['run_task'](self.runtime['user_lane'], 'after-command', show_progress=False)
+        self.runtime['pause_for_limit'].assert_not_awaited()
+        self.assertIn('могла уже изменить состояние', str(self.runtime['send'].call_args))
+        await self.runtime['run_task'](self.runtime['user_lane'], 'before-command', show_progress=False)
+        self.runtime['pause_for_limit'].assert_awaited_once()
+
+    async def test_real_antigravity_runner_keeps_provider_conversation(self):
+        cli = self.home / 'agy-fixture'
+        cli.write_text("""#!/usr/bin/python3
+import json
+import sys
+resumed = '--conversation' in sys.argv and 'conversation-fixture' in sys.argv
+print(json.dumps({'event': 'init', 'conversation_id': 'conversation-fixture'}))
+print(json.dumps({'event': 'result', 'result': {'status': 'SUCCESS',
+      'response': 'resumed' if resumed else 'fresh'}}))
+""")
+        cli.chmod(0o700)
+        (self.home / 'spool').mkdir()
+        self.runtime['AGY_BIN'] = str(cli)
+        self.runtime['CFG']['model'] = 'antigravity-argon'
+        ident, answer, error = await self.runtime['run_agent']('hello', timeout=5)
+        self.assertEqual((answer, error), ('fresh', None))
+        self.assertEqual(await self.runtime['run_agent']('follow-up', ident, timeout=5), (ident, 'resumed', None))

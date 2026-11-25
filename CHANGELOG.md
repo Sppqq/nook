@@ -6,7 +6,16 @@
 - Show the active provider's quota in the menu and status. The optional Codex account switcher can display quota for saved accounts with a compatible codex-auth CLI.
 - Add a close button to the main menu and show Antigravity progress from the start of a request.
 
-- Conservative GitHub source updater, Telegram confirmation, local-edit conflicts, preserved runtime data, independent restart supervision and source rollback.
+## 0.1.2-alpha.1
+
+- SemVer release selection with Stable, RC, Beta, Alpha and Nightly channels; existing installs retain the legacy update path until their owner chooses a channel.
+- Release installs and updates verify GitHub asset digests, Sigstore provenance from the official workflow, the tag commit and per-file hashes.
+- Telegram update controls include channel/version selection, pins, changelog, pause, optional unattended upgrades, and backup creation. New installs default to automatic updates off.
+- Fresh installation selects the newest eligible published release before downloading, with exact version pins and explicit development installation.
+- Dispatch release preparation and publication separately, with verified promotion and a protected Stable environment. Add notes, checksums and a direct-dependency SPDX SBOM.
+- Add private SQLite-consistent backups, explicit provider-data opt-in, size and retention settings, optional age encryption, and verified out-of-place restore.
+
+- Persist update transactions before changing source, detect disk exhaustion early, recover interrupted updates on startup, and require separate approval for downgrades.
 
 - Signed peer conversations over existing SSH, Telegram panel, optional text-only Mercury replies, replay protection and per-peer limits.
 - One-command GitHub bootstrap and interactive provider presets with a configuration preview.

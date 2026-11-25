@@ -3,9 +3,7 @@
 import asyncio
 import contextvars
 import datetime as dt
-import fcntl
 import html
-import hmac
 import json
 import logging
 import os
@@ -20,6 +18,14 @@ import uuid
 from base64 import b64encode
 from urllib.request import Request, urlopen
 
+HOME = os.path.abspath(os.environ.get("NOOK_HOME") or os.path.dirname(__file__))
+
+if __name__ == '__main__':
+    from tools.start_guard import recover
+
+    if recover(Path(HOME).resolve()):
+        os.execv(sys.executable, [sys.executable, *sys.argv])
+
 import aiohttp
 
 # Private runtime files also stay private when launched outside systemd.
@@ -28,6 +34,11 @@ os.umask(0o077)
 import guard
 import antigravity_limits
 import mods as modsys
+import job_scheduler
+from agent_process import read_tail, stop_process_group
+from telegram_gateway import owner_message, private_callback, private_sender, valid_pair_code
+from tool_executor import ShellCalls
+from provider_sessions import is_mercury_thread, resume_for_engine
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
@@ -35,7 +46,6 @@ from aiogram.filters import Command, CommandObject
 from aiogram.types import (BotCommand, CallbackQuery, FSInputFile, InlineKeyboardButton,
                            InlineKeyboardMarkup, Message)
 
-HOME = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(HOME, "config.json")
 STATE_PATH = os.path.join(HOME, "state.json")
 OUTBOX = os.path.join(HOME, "spool", "outbox")
@@ -112,14 +122,8 @@ bot = Bot(CFG["bot_token"], default=DefaultBotProperties(link_preview_is_disable
 dp = Dispatcher()
 
 
-def private_sender(msg) -> bool:
-    return bool(msg and msg.chat.type == "private" and msg.from_user
-                and msg.chat.id == msg.from_user.id)
-
-
 def is_owner(msg: Message) -> bool:
-    return (STATE["owner_id"] is not None and private_sender(msg)
-            and msg.from_user.id == STATE["owner_id"])
+    return owner_message(msg, STATE["owner_id"])
 
 
 # ---------------------------------------------------------------- telegram formatting
@@ -515,6 +519,7 @@ class Run:
         self.cancelled = False
         self.started = time.time()
         self.antigravity_model = None
+        self.effects_possible = False
 
     def cancel(self):
         self.cancelled = True
@@ -640,12 +645,8 @@ async def run_codex(prompt, thread_id=None, images=(), on_step=None, run: Run = 
         *cmd, cwd=HOME, env=codex_env(run_id), start_new_session=True, limit=16 * 1024 * 1024,
         stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
     run.proc = proc
-    proc.stdin.write(prompt.encode())
-    await proc.stdin.drain()
-    proc.stdin.close()
-
     new_thread, last_msg, errors = thread_id, "", []
-    stderr_task = asyncio.create_task(proc.stderr.read())
+    stderr_task = asyncio.create_task(read_tail(proc.stderr))
 
     async def pump():
         nonlocal new_thread, last_msg
@@ -660,6 +661,8 @@ async def run_codex(prompt, thread_id=None, images=(), on_step=None, run: Run = 
                 RUN_THREADS[run_id] = new_thread
             elif et in ("item.started", "item.completed"):
                 item = ev.get("item", {})
+                if item.get("type") not in {"reasoning", "agent_message", "todo_list"}:
+                    run.effects_possible = True
                 if et == "item.completed" and item.get("type") == "agent_message":
                     last_msg = item.get("text", "")
                 if on_step:
@@ -669,13 +672,30 @@ async def run_codex(prompt, thread_id=None, images=(), on_step=None, run: Run = 
             elif et in ("error", "turn.failed"):
                 errors.append(str(ev.get("message") or ev.get("error")))
 
-    try:
-        await asyncio.wait_for(pump(), timeout)
+    async def complete():
+        proc.stdin.write(prompt.encode())
+        try:
+            await proc.stdin.drain()
+        except (BrokenPipeError, ConnectionResetError):
+            pass  # A startup error can close stdin before the initial prompt is read.
+        finally:
+            proc.stdin.close()
+        await pump()
         await proc.wait()
+        return await asyncio.shield(stderr_task)
+
+    try:
+        stderr = (await asyncio.wait_for(complete(), timeout)).decode(errors="replace")
     except asyncio.TimeoutError:
         run.cancel()
         errors.append(f"таймаут {timeout // 60} мин")
-    stderr = (await stderr_task).decode(errors="replace")
+        stderr = ""
+    finally:
+        if not stderr_task.done():
+            stderr_task.cancel()
+        await asyncio.gather(stderr_task, return_exceptions=True)
+        await stop_process_group(proc)
+        run.proc = None
     try:
         with open(out_file) as f:
             final = f.read().strip() or last_msg
@@ -722,10 +742,6 @@ SHELL_TOOL = {"type": "function", "function": {
         "required": ["cmd"]}}}
 
 
-def is_mercury_thread(tid):
-    return bool(tid) and str(tid).startswith("merc-")
-
-
 def mercury_key():
     return load_secrets().get("INCEPTION_API_KEY") or os.environ.get("INCEPTION_API_KEY")
 
@@ -757,9 +773,9 @@ async def mercury_chat(messages, tools=None, effort=None, timeout=120):
                                   headers={"Authorization": f"Bearer {mercury_key()}"}) as r:
                 d = await r.json(content_type=None)
             if r.status >= 500 or r.status == 429:
-                raise RuntimeError(f"Mercury HTTP {r.status}: {str(d)[:200]}")
+                raise RuntimeError(f"Mercury HTTP {r.status}")
             if r.status != 200:
-                raise ValueError(f"Mercury HTTP {r.status}: {str(d)[:300]}")
+                raise ValueError(f"Mercury HTTP {r.status}")
             return d["choices"][0]["message"], d.get("usage", {})
         except ValueError:
             raise
@@ -809,50 +825,45 @@ async def run_mercury(prompt, thread_id=None, images=(), on_step=None, run: Run 
     run_id = uuid.uuid4().hex[:12]
     RUN_THREADS[run_id] = tid
     env = codex_env(run_id)
-    final, err, started = "", None, time.time()
+    final, err = "", None
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    shell = ShellCalls()
     try:
         for _ in range(MERCURY_STEPS):
             if run.cancelled:
                 err = "остановлено"
                 break
-            if time.time() - started > timeout:
+            remaining = deadline - loop.time()
+            if remaining <= 0:
                 err = f"таймаут {timeout // 60} мин"
                 break
-            m, _ = await mercury_chat(msgs, [SHELL_TOOL])
+            m, _ = await asyncio.wait_for(mercury_chat(msgs, [SHELL_TOOL]), remaining)
             calls = m.get("tool_calls") or []
+            if not isinstance(calls, list) or any(
+                    not isinstance(call, dict) or not isinstance(call.get("id"), str) or not call["id"]
+                    for call in calls):
+                err = "Mercury вернул некорректный список инструментов."
+                break
+            if len({call["id"] for call in calls}) != len(calls):
+                err = "Mercury вернул повторяющиеся ID инструментов."
+                break
             msgs.append({k: v for k, v in m.items() if k in ("role", "content", "tool_calls") and v is not None})
             if not calls:
                 final = (m.get("content") or "").strip()
                 break
             for c in calls:
-                try:
-                    args = json.loads(c["function"].get("arguments") or "{}")
-                except json.JSONDecodeError:
-                    args = {}
-                cmd = str(args.get("cmd", ""))
-                if on_step:
-                    await on_step("▸ " + cmd.replace("\n", " ")[:120])
-                proc = await asyncio.create_subprocess_exec(
-                    "bash", "-lc", cmd, cwd=HOME, env=env, start_new_session=True,
-                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
-                run.proc = proc
-                try:
-                    out, _ = await asyncio.wait_for(proc.communicate(), min(int(args.get("timeout") or 120), 900))
-                    out = out.decode(errors="replace")
-                    code = proc.returncode
-                except asyncio.TimeoutError:
-                    run.cancel()
-                    run.cancelled = False
-                    out, code = "таймаут команды", -1
-                if on_step:
-                    await on_step(("✓ " if code == 0 else "✗ ") + cmd.replace("\n", " ")[:120])
-                if len(out) > 8000:
-                    out = out[:3000] + "\n…[обрезано]…\n" + out[-5000:]
-                msgs.append({"role": "tool", "tool_call_id": c.get("id"), "content": f"exit {code}\n{out}"})
+                result = await shell.execute(c, cwd=HOME, env=env, run=run, deadline=deadline, on_step=on_step)
+                msgs.append({"role": "tool", "tool_call_id": c["id"], "content": f"exit {result.code}\n{result.output}"})
         else:
             err = f"не уложился в {MERCURY_STEPS} шагов"
+    except TimeoutError:
+        err = f"таймаут {timeout // 60} мин"
     except Exception as e:
-        err = f"Mercury: {e}"
+        log.warning("Mercury execution failed: %s", type(e).__name__)
+        err = "Mercury: не удалось выполнить запрос."
+    if shell.uncertain_commands and not err:
+        err = "Исход команды неизвестен. Проверь результат перед повтором."
     # длинные разговоры: системный + хвост не больше ~60 сообщений и ~120k символов (≈35k токенов)
     tail, size = [], 0
     for mm in reversed(msgs[1:]):
@@ -1074,21 +1085,7 @@ def engine_for(thread_id=None):
 
 async def run_agent(prompt, thread_id=None, images=(), on_step=None, run=None, timeout=USER_TIMEOUT):
     engine = engine_for(thread_id)
-    thread_engine = ("mercury" if is_mercury_thread(thread_id) else
-                     "antigravity" if str(thread_id or "").startswith("agy-") else "codex")
-    if thread_id and thread_engine != engine:
-        # разговор другого движка продолжить нельзя: свой разговор-двойник (xthreads) + прошлый ответ как контекст
-        twin = STATE.get("xthreads", {}).get(thread_id)
-        if twin:
-            twin_engine = ("mercury" if is_mercury_thread(twin) else
-                           "antigravity" if str(twin).startswith("agy-") else "codex")
-            if twin_engine != engine:
-                twin = None
-        if not twin:
-            ctx = STATE.get("last_answer", {}).get(thread_id, "")
-            if ctx:
-                prompt = f"[контекст: твой прошлый ответ в этом разговоре был]\n{ctx[:3000]}\n\n" + prompt
-        thread_id = twin
+    prompt, thread_id = resume_for_engine(prompt, thread_id, engine, STATE)
     if engine == "antigravity":
         return await run_antigravity(prompt, thread_id, images, on_step, run, timeout)
     if engine == "mercury":
@@ -1125,10 +1122,7 @@ async def limits_live():
                     return ev["result"]
         r = await asyncio.wait_for(read(), 20)
     finally:
-        try:
-            os.killpg(proc.pid, signal.SIGTERM)
-        except ProcessLookupError:
-            pass
+        await stop_process_group(proc)
     rl = r["rateLimits"]
     win = lambda w: w and {"used": w["usedPercent"], "mins": w["windowDurationMins"], "reset": w["resetsAt"]}
     return {"primary": win(rl.get("primary")), "secondary": win(rl.get("secondary")),
@@ -1387,7 +1381,7 @@ async def resume_loop():
 
 async def run_task(lane: Lane, prompt, *, thread_id=None, images=(), title=E("busy") + " думаю",
                    reply_to=None, show_progress=True, background=False, set_main=False,
-                   header="", incident=None, task=None, resumed=False):
+                   header="", incident=None, task=None, resumed=False, report_success=False):
     """Выполнить задачу в очереди lane и отправить результат хозяину."""
     chat = STATE["owner_id"]
     if not chat:
@@ -1435,15 +1429,17 @@ async def run_task(lane: Lane, prompt, *, thread_id=None, images=(), title=E("bu
             STATE["main_thread"] = tid
             STATE["main_at"] = time.time()
             save_state()
-        if err and engine == "codex" and LIMIT_RE.search(err) and not run.cancelled:
-            # лимит кончился посреди задачи: запомнить и продолжить после сброса, а пока — Mercury
-            await pause_for_limit(dict(lane=lane.name, prompt=prompt, thread=tid or thread_id, title=title,
-                                       background=background, header=header, task=task, reply_to=reply_to,
-                                       set_main=set_main, incident=incident, images=list(images)), final)
-            return tid
+        if err and engine == "codex" and LIMIT_RE.search(err) and not run.cancelled and not report_success:
+            if run.effects_possible:
+                err += "\nКоманда могла уже изменить состояние. Проверь результат перед повтором."
+            else:
+                await pause_for_limit(dict(lane=lane.name, prompt=prompt, thread=tid or thread_id, title=title,
+                                           background=background, header=header, task=task, reply_to=reply_to,
+                                           set_main=set_main, incident=incident, images=list(images)), final)
+                return tid
         if background and not err and (not final or SILENT_RE.match(final)):
             log.info("bg task silent: %s", prompt[:80])
-            return tid
+            return not run.cancelled if report_success else tid
         text = header + (final or "")
         if err:
             text += f"\n\n{E('err')} {err}"
@@ -1475,7 +1471,7 @@ async def run_task(lane: Lane, prompt, *, thread_id=None, images=(), title=E("bu
             for k in list(trim)[:-100]:
                 del trim[k]
             save_state()
-        return tid
+        return not err and not run.cancelled if report_success else tid
 
 
 # ---------------------------------------------------------------- меню
@@ -1625,7 +1621,7 @@ def busy_line():
 
 
 def jobs_list():
-    return sorted(load_json(JOBS, []), key=lambda j: j["at"])
+    return job_scheduler.list_jobs(JOBS)
 
 
 async def antigravity_quota_rows(model):
@@ -2140,12 +2136,7 @@ async def delete_msgs(chat_id, ids):
 
 
 def cancel_job(jid):
-    with open(JOBS + ".lock", "w") as lk:
-        fcntl.flock(lk, fcntl.LOCK_EX)
-        jobs = load_json(JOBS, [])
-        keep = [j for j in jobs if j["id"] != jid]
-        save_json(JOBS, keep)
-        return len(keep) != len(jobs)
+    return job_scheduler.cancel_job(JOBS, jid)
 
 
 def stop_all(lanes=None):
@@ -2243,8 +2234,7 @@ async def on_button(cb: CallbackQuery):
     try:
         return await handle_button(cb)
     finally:
-        if (notice and STATE["owner_id"] and cb.from_user.id == STATE["owner_id"]
-                and cb.message.chat.type == "private" and cb.message.chat.id == cb.from_user.id):
+        if notice and private_callback(cb) and cb.from_user.id == STATE["owner_id"]:
             trash(cb.message.chat.id, cb.message.message_id, 1)
             for extra in STATE.get("msg_groups", {}).get(str(cb.message.message_id), []):
                 trash(cb.message.chat.id, extra, 1)
@@ -2252,8 +2242,7 @@ async def on_button(cb: CallbackQuery):
 
 async def handle_button(cb: CallbackQuery):
     # Forwarded/group/inline buttons must never send private admin data there.
-    if (not cb.message or cb.message.chat.type != "private"
-            or cb.message.chat.id != cb.from_user.id):
+    if not private_callback(cb):
         return await cb.answer()
     if STATE["owner_id"] and cb.from_user.id != STATE["owner_id"] and is_guest(cb.from_user.id):
         return await guest_button(cb)
@@ -2757,8 +2746,7 @@ async def cmd_start(msg: Message, command: CommandObject):
         if not private_sender(msg):
             return
         pair_code = CFG.get("pair_code")
-        if (not isinstance(pair_code, str) or not pair_code
-                or not hmac.compare_digest((command.args or "").strip().encode(), pair_code.encode())):
+        if not valid_pair_code(command.args, pair_code):
             return await msg.answer("Привет. Я живу на одном сервере и слушаюсь только хозяина. "
                                     "Пришли /start <код привязки>.")
         STATE["owner_id"] = msg.from_user.id
@@ -4814,10 +4802,11 @@ async def set_commands():
         log.warning("delete_my_commands failed: %s", e)
 
 
-async def mods_reload():
-    r = REG.reload()
+async def mods_reload(*, start_tasks=True):
+    r = REG.reload(start_tasks=start_tasks)
     save_json(modsys.RESULT_PATH, r)
-    await set_commands()
+    if start_tasks:
+        await set_commands()
     log.info("mods reloaded: %s, failed: %s", r["loaded"], list(r["failed"]))
     return r
 
@@ -4828,9 +4817,15 @@ async def core_import_ok():
             "src=src.replace('asyncio.run(main())','pass');"
             "exec(compile(src,sys.argv[1],'exec'),{'__file__':sys.argv[1],'__name__':'check'})")
     p = await asyncio.create_subprocess_exec(sys.executable, "-c", code, os.path.join(HOME, "bot.py"),
-                                             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
-    out, _ = await asyncio.wait_for(p.communicate(), 60)
-    return p.returncode == 0, out.decode(errors="replace")[-1500:]
+                                             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+                                             start_new_session=True)
+    try:
+        out = await asyncio.wait_for(read_tail(p.stdout), 60)
+        return await asyncio.wait_for(p.wait(), 5) == 0, out.decode(errors="replace")[-1500:]
+    except asyncio.TimeoutError:
+        return False, "Проверка изменённого ядра не завершилась вовремя."
+    finally:
+        await stop_process_group(p)
 
 
 async def mods_loop():
@@ -4840,10 +4835,10 @@ async def mods_loop():
     while True:
         try:
             heartbeat(Path(HOME), REG.failed)
-            if os.path.exists(modsys.RELOAD_FLAG):
+            if not getattr(core, 'backup_active', False) and os.path.exists(modsys.RELOAD_FLAG):
                 os.remove(modsys.RELOAD_FLAG)
                 await mods_reload()
-            if not good_saved and time.time() - started > 60:  # прожили минуту — эту версию ядра считаем рабочей
+            if not getattr(core, 'backup_active', False) and not good_saved and time.time() - started > 60:
                 shutil.copy2(os.path.join(HOME, "bot.py"), os.path.join(modsys.SPOOL, "bot.py.good"))
                 good_saved = True
             if os.path.exists(modsys.RESTART_FLAG) and not (user_lane.current or bg_lane.current
@@ -5089,22 +5084,7 @@ async def send_ask(item):
 
 
 def take_due_jobs():
-    os.makedirs(os.path.dirname(JOBS), exist_ok=True)
-    with open(JOBS + ".lock", "w") as lk:
-        fcntl.flock(lk, fcntl.LOCK_EX)
-        jobs = load_json(JOBS, [])
-        now, due, keep = time.time(), [], []
-        for j in jobs:
-            if j["at"] <= now:
-                due.append(j)
-                if j.get("every"):
-                    j = dict(j, at=max(j["at"] + j["every"], now + 60))
-                    keep.append(j)
-            else:
-                keep.append(j)
-        if due:
-            save_json(JOBS, keep)
-        return due
+    return job_scheduler.take_due(JOBS)
 
 
 REMIND_RE = re.compile(r"(?is)^\W*(напомни|напоминание|напомнить|remind)")
@@ -5120,21 +5100,33 @@ async def remind(j):
     await notify(f"{E('bell')} {text}", markup=kb((btn("Меню", "menu", "home"),)))
 
 
+async def execute_scheduled(job):
+    try:
+        if REMIND_RE.match(job["prompt"]) and not REMIND_WORK_RE.search(job["prompt"]):
+            await remind(job)
+        else:
+            created = job.get("created", job["at"])
+            prompt = (f"[ОТЛОЖЕННАЯ ЗАДАЧА {job['id']}, поставлена "
+                      f"{dt.datetime.fromtimestamp(created):%d.%m %H:%M}"
+                      f"{', повторяется' if job.get('every') else ''}]\n{job['prompt']}\n\n"
+                      "Выполни. Если это напоминание или поручение хозяина — обязательно напиши ему "
+                      "(коротко, по делу). Если это твоя служебная проверка и сказать нечего — ответь SILENT.")
+            known = await run_task(bg_lane, prompt, background=True, show_progress=False,
+                                   header=E("jobs") + " ", report_success=True)
+            if not known:
+                log.warning("scheduled task %s requires review", job["id"])
+                return
+        await asyncio.to_thread(job_scheduler.complete, JOBS, job["claim_id"])
+    except Exception:
+        log.exception("scheduled task %s requires review", job["id"])
+
+
 async def jobs_loop():
     while True:
         try:
-            if STATE["owner_id"]:
-                for j in take_due_jobs():
-                    if REMIND_RE.match(j["prompt"]) and not REMIND_WORK_RE.search(j["prompt"]):
-                        asyncio.create_task(remind(j))
-                        continue
-                    prompt = (f"[ОТЛОЖЕННАЯ ЗАДАЧА {j['id']}, поставлена "
-                              f"{dt.datetime.fromtimestamp(j['created']):%d.%m %H:%M}"
-                              f"{', повторяется' if j.get('every') else ''}]\n{j['prompt']}\n\n"
-                              "Выполни. Если это напоминание или поручение хозяина — обязательно напиши ему "
-                              "(коротко, по делу). Если это твоя служебная проверка и сказать нечего — ответь SILENT.")
-                    asyncio.create_task(run_task(bg_lane, prompt, background=True, show_progress=False,
-                                                 header=E("jobs") + " "))
+            if STATE["owner_id"] and not getattr(core, "backup_active", False):
+                for job in await asyncio.to_thread(take_due_jobs):
+                    asyncio.create_task(execute_scheduled(job))
         except Exception:
             log.exception("jobs failed")
         await asyncio.sleep(20)
@@ -5230,11 +5222,24 @@ async def main():
 
 
 async def run_main():
+    from legacy_migration import startup_held
+    from nook_update import heartbeat
+
+    home = Path(HOME)
     for d in (OUTBOX, INBOX):
         os.makedirs(d, exist_ok=True)
     os.makedirs(modsys.SPOOL, exist_ok=True)
-    await mods_reload()
+    held = startup_held(home)
+    await mods_reload(start_tasks=not held)
     me = await bot.get_me()
+    if held:
+        # Let the external supervisor verify the candidate before polling
+        # Telegram or allowing background tasks to claim real work.
+        while startup_held(home):
+            heartbeat(home, REG.failed)
+            await asyncio.sleep(2)
+        REG.start_tasks()
+        await set_commands()
     log.info("started as @%s, owner=%s", me.username, STATE["owner_id"])
     if not STATE["owner_id"]:
         log.info("pair with: /start %s", CFG.get("pair_code"))

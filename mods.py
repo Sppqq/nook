@@ -225,12 +225,18 @@ class Registry:
         self.failed = {}     # name -> текст ошибки загрузки
 
     def load_one(self, name):
+        from local_extensions import trusted_module
+
         path = os.path.join(MODS_DIR, f"{name}.py")
+        source = trusted_module(name, path)
         m = Mod(name, self.core)
         modname = f"nook_mod_{name}_{int(time.time() * 1000)}"
         spec = importlib.util.spec_from_file_location(modname, path)
         module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
+        if source is None:
+            spec.loader.exec_module(module)
+        else:
+            exec(compile(source, path, "exec"), module.__dict__)
         doc = (module.__doc__ or "").strip()
         m.title = getattr(module, "TITLE", None) or (doc.splitlines()[0] if doc else name)
         m.doc = doc
@@ -245,7 +251,7 @@ class Registry:
                 t.cancel()
         self.mods = {}
 
-    def reload(self):
+    def reload(self, *, start_tasks=True):
         """Перечитать все моды. Возвращает {"loaded": [...], "failed": {name: err}, "disabled": [...]}."""
         self.stop_all()
         self.failed = {}
@@ -264,16 +270,22 @@ class Registry:
             except Exception:
                 self.failed[name] = traceback.format_exc(limit=3)[-1200:]
                 log.error("mod %s failed to load: %s", name, self.failed[name])
+        if start_tasks:
+            self.start_tasks()
+        return {"loaded": sorted(self.mods), "failed": self.failed, "disabled": sorted(disabled & set(mod_files()))}
+
+    def start_tasks(self):
         for m in self.mods.values():
             for fn in m.startup:
                 m.tasks.append(asyncio.create_task(m.call(fn, None, "on_start")))
             for secs, fn in m.periodic:
                 m.tasks.append(asyncio.create_task(self._loop(m, secs, fn)))
-        return {"loaded": sorted(self.mods), "failed": self.failed, "disabled": sorted(disabled & set(mod_files()))}
 
     async def _loop(self, m, secs, fn):
         while True:
             await asyncio.sleep(secs)
+            if getattr(self.core, 'backup_active', False) is True:
+                continue
             await m.call(fn, None, f"every({secs})")
             if m.errors >= 5:
                 await self.core.notify(f"{self.core.E('err')} Мод **{m.name}** падает 5 раз подряд — фоновую задачу остановил.")

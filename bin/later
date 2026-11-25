@@ -5,9 +5,14 @@
   later --every 6h "посмотри рост диска"
   later --every 1d --at 09:00 "утренняя сводка хозяину"   (первый раз в ближайшие 09:00 МСК, дальше раз в сутки)
   later --list | later --cancel ID
+  later --claims | later --ack-claim ID
 """
-import datetime as dt, fcntl, json, os, re, sys, time, uuid
+import datetime as dt, json, os, re, sys, time, uuid
+from pathlib import Path
 from zoneinfo import ZoneInfo
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from job_scheduler import complete, modify_jobs, unresolved
 
 MOSCOW = ZoneInfo('Europe/Moscow')
 
@@ -42,23 +47,30 @@ def parse_when(s):
 
 
 def locked(fn):
-    os.makedirs(os.path.dirname(JOBS), exist_ok=True)
-    with open(JOBS + ".lock", "w") as lk:
-        fcntl.flock(lk, fcntl.LOCK_EX)
-        try:
-            jobs = json.load(open(JOBS))
-        except (FileNotFoundError, json.JSONDecodeError):
-            jobs = []
-        jobs, out = fn(jobs)
-        tmp = JOBS + ".tmp"
-        json.dump(jobs, open(tmp, "w"), ensure_ascii=False, indent=1)
-        os.replace(tmp, JOBS)
-        return out
+    try:
+        return modify_jobs(JOBS, fn)
+    except (OSError, ValueError) as error:
+        sys.exit(str(error))
 
 
 args = sys.argv[1:]
 if not args or args[0] in ("-h", "--help"):
     print(__doc__); sys.exit(0)
+if args[0] == "--claims":
+    try:
+        print(json.dumps(unresolved(JOBS), ensure_ascii=False, indent=2))
+    except (OSError, ValueError) as error:
+        sys.exit(str(error))
+    sys.exit(0)
+if args[0] == "--ack-claim":
+    if len(args) != 2:
+        sys.exit("later --ack-claim ID")
+    try:
+        ok = complete(JOBS, args[1])
+    except (OSError, ValueError) as error:
+        sys.exit(str(error))
+    print("запись закрыта" if ok else "запись отсутствует или очередь ещё не восстановлена")
+    sys.exit(0 if ok else 1)
 if args[0] == "--list":
     def f(jobs):
         for j in jobs:

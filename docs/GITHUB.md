@@ -1,5 +1,15 @@
 # GitHub: owner or agent account
 
+Local Git commits require a configured Git author and any locally enforced
+signing key. They do not contact GitHub. A Nook runtime using `bin/github-git`
+needs the configured Nook profile because that wrapper supplies the author
+and credentials. Public clones can be read anonymously. To push a branch that
+changes Actions workflows, the owner or authorized collaborator needs
+Contents and Workflows write access. Pull requests write access is needed to
+edit or open a PR. Only an account with repository administration access can
+enable the release environments and tag rulesets described in
+[`RELEASE_POLICY.md`](../RELEASE_POLICY.md).
+
 The installer offers three options: your account, a separate agent account, or connect later. The selected token is verified against the login you enter, then stored only in `secrets.env` with mode 600. Account type and verified commit identity go in `config.json`; these files are never published. Model-provider login is separate from GitHub login.
 
 For an **owner account**, create a [fine-grained PAT](https://github.com/settings/personal-access-tokens/new) scoped to selected repositories. Grant Contents and Pull requests read/write and Metadata read. Add other permissions only when required by your task. Identity verification does not verify write permissions for every repository.

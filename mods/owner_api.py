@@ -10,7 +10,7 @@ import time
 
 from aiohttp import web
 
-ROOT = Path('__NOOK_USER_HOME__/nook/spool/owner-api')
+ROOT = Path(__file__).resolve().parents[1] / 'spool' / 'owner-api'
 ID = re.compile(r'^[a-f0-9]{32}$')
 PORT = 18791
 TERMINAL = {'completed', 'failed', 'needs_owner', 'interrupted'}

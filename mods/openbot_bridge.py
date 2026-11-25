@@ -13,7 +13,7 @@ from pathlib import Path
 
 ROOT = Path('__NOOK_USER_HOME__/openbot/nook-bridge')
 ID = re.compile(r'^[0-9a-f]{32}$')
-MEMORY = Path('__NOOK_USER_HOME__/nook/memory')
+MEMORY = Path(__file__).resolve().parents[1] / 'memory'
 ROSTER = MEMORY / 'openbot-agents.json'
 DB = '__NOOK_USER_HOME__/openbot/data/.config/OpenBot/openbot.db'
 
