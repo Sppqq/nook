@@ -2,6 +2,7 @@ import importlib.util
 from pathlib import Path
 import unittest
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 import mods
 
@@ -25,6 +26,24 @@ class UpdateManagerModTests(unittest.TestCase):
             'unpin', 'check-release', 'install-update', 'confirm-downgrade',
             'set-auto', 'toggle-pause', 'backup', 'rollback-help',
         }.issubset(manager.callbacks))
+
+
+class LocalizedUpdateTests(unittest.IsolatedAsyncioTestCase):
+    async def test_english_dependency_downgrade_keeps_separate_confirmation(self):
+        manager = mods.Mod('update_manager_test', SimpleNamespace(state={'ui_language': 'en'}, btn=lambda text, data, icon, style: (text, data)))
+        MODULE.setup(manager)
+        ctx = SimpleNamespace(reply=AsyncMock(), toast=AsyncMock())
+        settings = {'channel': 'beta', 'version_pin': '0.1.2-beta.1', 'auto_mode': 'off', 'paused': False}
+        plan = {'changes': ['bot.py'], 'id': 'plan', 'version': '0.1.2-beta.1',
+                'current_version': '0.1.3', 'environment_manifest': {'requirements': []}, 'downgrade': True}
+        with patch.object(MODULE.nook_update, 'update_settings', return_value=settings), \
+             patch.object(MODULE.nook_update, 'prepare', return_value=plan):
+            await manager.callbacks['check-release'](ctx)
+        text, buttons = ctx.reply.await_args.args
+        self.assertIn('full local backup', text)
+        self.assertIn('Downgrade from `0.1.3` to `0.1.2-beta.1`', text)
+        self.assertIn('I understand the downgrade risk', str(buttons))
+        self.assertIn('confirm-downgrade:plan', str(buttons))
 
 
 if __name__ == '__main__':

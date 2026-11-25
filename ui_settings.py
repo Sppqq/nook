@@ -1,28 +1,35 @@
 """Personal button visibility and appearance, independent of provider settings."""
+
+
+def translate(state, russian, english):
+    """Use Russian for legacy installations and unknown saved preferences."""
+    return english if state.get('ui_language') == 'en' else russian
+
+
 GROUPS = {
     'answers': (
-        ('answer_continue', 'Продолжить · Mercury', True),
-        ('answer_questions', 'Да / нет под вопросами', True),
-        ('answer_menu', 'Меню под ответом', True),
-        ('answer_fav', 'В избранное', True),
-        ('answer_mute', 'Не следить за этим', True),
-        ('answer_close', 'Закрыть ответ', False),
+        ('answer_continue', 'Продолжить · Mercury', 'Continue · Mercury', True),
+        ('answer_questions', 'Да / нет под вопросами', 'Yes / no under questions', True),
+        ('answer_menu', 'Меню под ответом', 'Menu under replies', True),
+        ('answer_fav', 'В избранное', 'Add to favorites', True),
+        ('answer_mute', 'Не следить за этим', 'Mute this topic', True),
+        ('answer_close', 'Закрыть ответ', 'Close reply', False),
     ),
     'menu': (
-        ('menu_status', 'Статус', True), ('menu_graph', 'Графики', True),
-        ('menu_limits', 'Лимиты', True), ('menu_check', 'Проверь всё', True),
-        ('menu_clean', 'Уборка', True), ('menu_jobs', 'Задачи', True),
-        ('menu_nodes', 'Ноды', True), ('menu_favs', 'Избранное', True),
-        ('menu_digest', 'Сводка', True), ('menu_mods', 'Кнопки модов', True),
+        ('menu_status', 'Статус', 'Status', True), ('menu_graph', 'Графики', 'Charts', True),
+        ('menu_limits', 'Лимиты', 'Usage limits', True), ('menu_check', 'Проверь всё', 'Run checks', True),
+        ('menu_clean', 'Уборка', 'Clean up', True), ('menu_jobs', 'Задачи', 'Tasks', True),
+        ('menu_nodes', 'Ноды', 'Nodes', True), ('menu_favs', 'Избранное', 'Favorites', True),
+        ('menu_digest', 'Сводка', 'Digest', True), ('menu_mods', 'Кнопки модов', 'Mod buttons', True),
     ),
     'look': (
-        ('icons', 'Иконки на кнопках', True),
-        ('premium_icons', 'Премиум-эмодзи на кнопках', True),
-        ('colors', 'Цветные кнопки', True),
-        ('single_column', 'Кнопки в один столбик', False),
+        ('icons', 'Иконки на кнопках', 'Button icons', True),
+        ('premium_icons', 'Премиум-эмодзи на кнопках', 'Premium emoji on buttons', True),
+        ('colors', 'Цветные кнопки', 'Colored buttons', True),
+        ('single_column', 'Кнопки в один столбик', 'One button per row', False),
     ),
 }
-DEFAULTS = {key: default for items in GROUPS.values() for key, _, default in items}
+DEFAULTS = {key: default for items in GROUPS.values() for key, _, _, default in items}
 MENU_ACTIONS = {action: 'menu_' + name for action, name in (
     ('status', 'status'), ('graph', 'graph'), ('limits', 'limits'),
     ('q:check', 'check'), ('q:clean', 'clean'), ('jobs', 'jobs'),
@@ -52,7 +59,7 @@ def filter_keyboard(state, markup, scope, make_keyboard, make_button):
     rows = [row for row in rows if row]
     if scope == 'answer' and option(state, 'answer_close'):
         if not any(b.callback_data == 'close' for row in rows for b in row):
-            rows.append([make_button('Закрыть', 'close', 'cross')])
+            rows.append([make_button(translate(state, 'Закрыть', 'Close'), 'close', 'cross')])
     if option(state, 'single_column'):
         rows = [[button] for row in rows for button in row]
     return make_keyboard(*rows) if rows else None
@@ -60,6 +67,9 @@ def filter_keyboard(state, markup, scope, make_keyboard, make_button):
 
 def apply_action(state, action):
     parts = action.split(':')
+    if len(parts) == 3 and parts[:2] == ['custom', 'language'] and parts[2] in ('ru', 'en'):
+        state['ui_language'] = parts[2]
+        return 'home'
     if len(parts) == 4 and parts[:2] == ['custom', 'toggle']:
         section, key = parts[2:]
         if key not in {item[0] for item in GROUPS.get(section, ())}:
@@ -87,28 +97,56 @@ def apply_action(state, action):
 
 
 def settings_view(state, button, keyboard, section='home'):
-    nav = [(button('Под ответами', 'settings_answers', 'say'), button('Главное меню', 'settings_menu', 'home')),
-           (button('Оформление', 'settings_look', 'spark'),)]
+    def t(russian, english):
+        return translate(state, russian, english)
+
+    nav = [(button(t('Под ответами', 'Under replies'), 'settings_answers', 'say'),
+            button(t('Главное меню', 'Main menu'), 'settings_menu', 'home')),
+           (button(t('Оформление', 'Appearance'), 'settings_look', 'spark'),)]
     if section == 'home':
-        text = ('{{e:more}} **Настройки интерфейса**\n\nВыбирай, какие кнопки показывать. '
-                'Каждое нажатие сохраняется сразу.\n\n'
-                'Быстрые наборы заменяют только настройки интерфейса. '
-                'Уведомления и модель настраиваются отдельно в «Ещё».')
-        rows = nav + [(button('Минимум', 'custom:preset:minimal', 'clean'), button('Стандарт', 'custom:preset:default', 'refresh'),
-                       button('Всё', 'custom:preset:all', 'plus'))]
+        text = t(
+            '{{e:more}} **Настройки интерфейса**\n\nВыбирай, какие кнопки показывать. '
+            'Каждое нажатие сохраняется сразу.\n\n'
+            'Быстрые наборы заменяют только настройки интерфейса. '
+            'Уведомления и модель настраиваются отдельно в «Ещё».',
+            '{{e:more}} **Interface settings**\n\nChoose the buttons to display. Changes are saved immediately. '
+            'Presets apply to the interface. Notifications and the model are configured under More.')
+        english = state.get('ui_language') == 'en'
+        rows = nav + [
+            (button('Русский', 'custom:language:ru', 'ok' if not english else None),
+             button('English', 'custom:language:en', 'ok' if english else None)),
+            (button(t('Минимум', 'Minimal'), 'custom:preset:minimal', 'clean'),
+             button(t('Стандарт', 'Default'), 'custom:preset:default', 'refresh'),
+             button(t('Всё', 'All'), 'custom:preset:all', 'plus')),
+        ]
     else:
-        titles = {'answers': 'Кнопки под ответами', 'menu': 'Кнопки главного меню', 'look': 'Оформление кнопок'}
-        text = '{{e:spark}} **' + titles[section] + '**\n\nНажми, чтобы включить или выключить.'
+        titles = {'answers': t('Кнопки под ответами', 'Buttons under replies'),
+                  'menu': t('Кнопки главного меню', 'Main menu buttons'),
+                  'look': t('Оформление кнопок', 'Button appearance')}
+        text = '{{e:spark}} **' + titles[section] + '**\n\n' + t(
+            'Нажми, чтобы включить или выключить.', 'Tap a button to toggle it.')
         if section == 'menu':
-            text += '\n«Ещё», «Настройки» и остановка работающей задачи остаются доступны. Скрытые разделы остаются в «Ещё». '
-            text += 'Избранное и сводка появляются, когда в них есть записи.'
+            text += t(
+                '\n«Ещё», «Настройки» и остановка работающей задачи остаются доступны. Скрытые разделы остаются в «Ещё». '
+                'Избранное и сводка появляются, когда в них есть записи.',
+                '\nMore, Settings and Stop remain available. Open hidden sections from More. '
+                'Favorites and Digest appear when they have entries.')
         elif section == 'answers':
-            text += '\nПрименяется к следующим ответам. Кнопки подтверждения root-команд и входа в аккаунт сохраняются.'
+            text += t(
+                '\nПрименяется к следующим ответам. Кнопки подтверждения root-команд и входа в аккаунт сохраняются.',
+                '\nApplies to future replies. Root approval and account sign-in buttons stay available.')
         else:
-            text += '\nЦвет поддерживается в расширенном виде Telegram. Премиум-эмодзи доступны в расширенном виде; в обычном виде будут простые. Сначала включи «Иконки», затем выбери премиум или обычные. Иконки и цвет меняются сразу. Столбик применяется к главному меню и ответам.'
-        rows = [(button(('Вкл · ' if option(state, key) else 'Выкл · ') + label,
-                        'custom:toggle:' + section + ':' + key,
-                        'ok' if option(state, key) else 'cross'),) for key, label, _ in GROUPS[section]]
-        rows += [(button('Назад к настройкам', 'settings', 'back'),)]
-    rows += [(button('Меню', 'menu', 'home'), button('Ещё', 'more', 'more'))]
+            text += t(
+                '\nЦвет поддерживается в расширенном виде Telegram. Премиум-эмодзи доступны в расширенном виде; '
+                'в обычном виде будут простые. Сначала включи «Иконки», затем выбери премиум или обычные. '
+                'Иконки и цвет меняются сразу. Столбик применяется к главному меню и ответам.',
+                '\nColors and premium emoji use the rich Telegram layout. The classic layout uses standard emoji. '
+                'Enable Icons before choosing premium emoji. Icon and color changes apply immediately. '
+                'The single-column layout applies to the main menu and replies.')
+        rows = [(button((t('Вкл · ', 'On · ') if option(state, key) else t('Выкл · ', 'Off · '))
+                        + t(russian, english), 'custom:toggle:' + section + ':' + key,
+                        'ok' if option(state, key) else 'cross'),)
+                for key, russian, english, _ in GROUPS[section]]
+        rows += [(button(t('Назад к настройкам', 'Back to settings'), 'settings', 'back'),)]
+    rows += [(button(t('Меню', 'Menu'), 'menu', 'home'), button(t('Ещё', 'More'), 'more', 'more'))]
     return text, keyboard(*rows)

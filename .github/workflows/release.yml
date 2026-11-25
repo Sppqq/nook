@@ -75,6 +75,13 @@ jobs:
           git diff --exit-code
           (cd dist && sha256sum -c SHA256SUMS)
           cp "$RUNNER_TEMP/release-notes.md" dist/
+      - name: Verify migration and rollback with the candidate archive
+        run: |
+          sudo loginctl enable-linger "$(id -un)"
+          export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+          export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
+          timeout 30 bash -c 'until systemctl --user show-environment >/dev/null 2>&1; do sleep 1; done'
+          python -m tools.check_legacy_systemd "dist/nook-$(cat VERSION).zip"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: verified-candidate

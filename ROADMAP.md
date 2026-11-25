@@ -2,17 +2,65 @@
 
 ## Current work
 
+- Run the legacy migration and rollback fixtures on the exact archive
+  prepared by the release workflow. Document upgrade entry points by
+  installed version in both languages. Keep live VPS checks and independent
+  review as separate promotion criteria.
+
+- Pool credential and retry guards cover concurrent quota probes, manual
+  account changes, malformed streams, partial replies, and mismatched
+  session IDs. Manual switch cancellation restores the prior login and
+  registry. Verify token refresh and fallback with disposable live
+  accounts before promotion.
+
+- The owner can switch the main Telegram menu, interface settings, release
+  update screens, Codex quota and pool controls, and quota recovery notices
+  between Russian and English. Manual Codex operations, local extension
+  controls, server status, scheduled tasks and model settings also use
+  that preference. Complete localization of the remaining Telegram
+  views, operational notifications, and installer.
+
+- Current local line coverage is 31.7% for `bot.py`, 87.5% for the pool,
+  74.7% for the updater and 62.4% for legacy migration. Focus on the queue, Telegram entry points,
+  and recovery branches to close the core coverage gap.
+
+- The pool checks unknown quota again before distant account resets and
+  resumes as soon as an eligible account is confirmed.
+
+- PR #9 continues the work integrated into main by #7 and #8.
+- The original v0.1.1 Telegram updater can adopt the candidate through
+  its existing code-only main update. A disposable user-systemd test
+  exercises the original menu and worker with the v0.1.1 dependency set,
+  startup health, channel preservation and recovery after interruption.
+  The original v0.1.0 requires the signed-release bootstrap. A second
+  disposable fixture runs its actual bot with its pinned dependencies and
+  checks that switching from main needs a separate Telegram confirmation.
+- Managed installations can adopt a signed compatible release with a new
+  dependency set through Telegram. The updater verifies an offline snapshot,
+  waits for candidate health, and restores the old code and environment on
+  failure. Run the full flow with real Telegram and Codex on a dedicated VPS.
+- The attested `v0.1.2-alpha.1` release is published. PR #9 prepares the
+  next source bundle as `v0.1.2-nightly.20261125` for promotion to Alpha 2,
+  Beta, RC and Stable after validation.
+
+- Ported opt-in Codex routing to the public release tree. The disposable
+  fixture checks the Telegram owner gate, least-quota selection and CLI
+  resume. Test managed-account token refresh and recovery on a spare host.
+
 - Iteration 5 implements a separate local extension lifecycle, isolated API v1
   execution, owner policy, versioning, health checks, and automatic rollback.
-  Trusted legacy modules can be pinned by hash without migrating their API.
+  Trusted legacy modules can be pinned by hash. A Bubblewrap fixture covers
+  opt-in migration and rollback of a data-only function. Each legacy module
+  that requires Telegram, host access or delegated actions needs its own
+  wrapper review before switching.
 - Provider session selection now lives outside `bot.py`. Codex failover
   no longer queues a retry after observed tool activity.
 
 - Iteration 4 extracts Telegram identity checks and durable scheduled-job
   storage. Actual aiogram dispatch and the existing `later` CLI exercise
   these paths without a production bot.
-- The release owner runbook records the same-repository PR and push blockage,
-  branch/tag/environment settings, and repeatable candidate promotion.
+- The release owner runbook records branch, tag, and environment settings
+  and repeatable candidate promotion. Push and PR checks run on PR #9.
 - Mercury's shell executor has bounded capture, a total request deadline,
   duplicate tool-ID handling and retry suppression after uncertain outcomes.
   The Linux benchmark measures startup/import, chart rendering and the
@@ -32,9 +80,8 @@
   Promotion verifies published predecessors before comparing application trees.
 - Fresh installers resolve the channel or exact published version before
   downloading. The development checkout has its own explicit mode.
-- Remaining owner setup: protect `main` and version tags, configure the
-  release environments and approve a new Actions run. Existing CI runs for
-  PR #7 reported `action_required`.
+- Confirm protection for `main` and version tags and review the release
+  environments before promotion. PR #9 exercises Actions on push and PR.
 - Backups use SQLite snapshots, reject changed non-SQLite files, and support
   offline capture, age encryption, retention and explicit provider opt-in.
 - The updater now binds staged plans to settings, supports explicit downgrade,
@@ -182,30 +229,28 @@
 
 ## Next acceptance gates
 
-- Iteration 5 local extensions and provider session/failover changes are
-  implemented and locally verified; send the session stage to PR #7 and
-  verify its Actions jobs before counting it complete.
 - The legacy SSH bootstrap handles exact `v0.1.0` and `v0.1.1`
   installations with an attested target release. Linux CI checks both trees
   with a disposable user systemd service and a local candidate artifact.
-  Published-artifact and live Telegram/provider tests still require a release
-  and a disposable bot. The historical Telegram install paths need a bridge
-  deployed outside these immutable tags.
-- Raise measured meaningful coverage from 41% overall / 19% `bot.py` toward
-  50% / 30%; prioritize direct bot lifecycle and security boundary behavior.
+  Verify the published artifact with a disposable live bot. v0.1.0 needs
+  an initial bootstrap because its immutable source has no Telegram updater.
+  The current updater can migrate dependencies after adoption. The
+  original v0.1.1 updater requires matching dependencies for first adoption.
+- Raise core line coverage toward 90%. Prioritize direct bot lifecycle and
+  security boundary behavior, with 30% for `bot.py` as the next milestone.
 - Add bounded protocol version/capability negotiation and revocation tests
   without changing existing peer chat behavior or granting arbitrary remote
   command execution.
 
-- Validate the release workflow on GitHub with the owner-selected profile;
-  test a real disposable Telegram/systemd installation and rollback before
-  publishing the Alpha tag.
+- Run a real disposable Telegram/systemd installation and rollback before
+  promoting the next candidate to Alpha. Check the installed provider CLI
+  and session continuity on the same host.
 - Decide and document how to resolve the existing GitHub releases whose
   prerelease flags disagree with their stable SemVer tags; do not silently
   rewrite those releases.
-- Add independent release signing/attestation, same-artifact promotion,
-  Python 3.11 CI evidence, measured coverage and reproducible performance /
-  reliability tests.
+- Obtain an independent review of release trust and recovery controls.
+  Continue measuring coverage and reproduce the performance and reliability
+  checks on dedicated VPS hardware.
 - Continue small compatibility-preserving refactors only after establishing
   focused tests for the affected bot/provider behavior.
 

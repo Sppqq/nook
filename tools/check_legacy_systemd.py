@@ -1,5 +1,7 @@
-"""Exercise both historical source trees against a disposable user systemd unit."""
+"""Exercise historical and dependency-changing updates in disposable user systemd services."""
 import argparse
+import asyncio
+from importlib.util import module_from_spec, spec_from_file_location
 import json
 import os
 from hashlib import sha256
@@ -9,15 +11,20 @@ import signal
 import sqlite3
 import subprocess
 import sys
+import tarfile
 import tempfile
 import time
+from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import legacy_migration as migration
 import nook_update
 
 ROOT = Path(__file__).resolve().parents[1]
+# A successful cold start may take longer on a busy test runner. Keep the
+# intentional failed-health case short and leave the production limits intact.
+SUCCESSFUL_START_TIMEOUT = 75
 SERVICE = """\
 import json
 from pathlib import Path
@@ -35,18 +42,24 @@ def stop(*_):
         (home / 'memory/last-write').write_text(version)
     raise SystemExit(0)
 signal.signal(signal.SIGTERM, stop)
-if not is_legacy and sys.argv[1] == 'upgrade':
+mode = sys.argv[1]
+if (version == '0.1.0' and mode == 'v010') or (not is_legacy and mode in ('upgrade', 'button', 'v010')):
     import asyncio
     from contextlib import suppress
 
+    if not is_legacy:
+        from tools.start_guard import recover
+        assert not recover(home)
+
     import bot as nook_bot
     from aiogram.client.session.base import BaseSession
-    from aiogram.methods import DeleteMyCommands, GetMe, GetUpdates, SendMessage
+    from aiogram.methods import AnswerCallbackQuery, DeleteMyCommands, EditMessageText, GetMe, GetUpdates, SendMessage
     from aiogram.types import Message, Update, User
 
     class TestTelegram(BaseSession):
         sent_update = False
         saw_reminder = False
+        channel_update = 0
 
         async def close(self):
             pass
@@ -58,10 +71,27 @@ if not is_legacy and sys.argv[1] == 'upgrade':
         async def make_request(self, bot, method, timeout=None):
             if isinstance(method, GetMe):
                 return User(id=123456, is_bot=True, first_name='Fixture', username='fixture_bot')
-            if isinstance(method, DeleteMyCommands):
+            if isinstance(method, (AnswerCallbackQuery, DeleteMyCommands)):
                 return True
             if isinstance(method, GetUpdates):
                 if self.sent_update:
+                    # The fixture authorizes each step after checking that
+                    # migration and channel preview leave legacy mode intact.
+                    go = home.parent / f'allow-channel-{self.channel_update}'
+                    if (mode == 'v010' and not is_legacy and self.channel_update < 2 and go.is_file()):
+                        data = ('mod:update_manager:choose-channel:alpha' if self.channel_update == 0
+                                else self.channel_confirmation)
+                        self.channel_update += 1
+                        return [Update.model_validate({
+                            'update_id': 1 + self.channel_update,
+                            'callback_query': {
+                                'id': str(self.channel_update), 'chat_instance': 'test',
+                                'from': {'id': 77, 'is_bot': False, 'first_name': 'Owner'},
+                                'data': data,
+                                'message': {'message_id': 2, 'date': int(time.time()),
+                                            'chat': {'id': 77, 'type': 'private'}, 'text': 'Nook'},
+                            },
+                        })]
                     await asyncio.sleep(0.25)
                     return []
                 self.sent_update = True
@@ -74,11 +104,17 @@ if not is_legacy and sys.argv[1] == 'upgrade':
                     },
                 })]
             if isinstance(method, SendMessage):
-                self.saw_reminder = 'migration-reminder' in method.text
+                self.saw_reminder |= 'migration-reminder' in method.text
+                if self.channel_update == 1:
+                    self.channel_confirmation = method.reply_markup.inline_keyboard[0][0].callback_data
+                    (home.parent / 'channel-preview').write_text(method.text)
                 return Message.model_validate({
                     'message_id': 2, 'date': int(time.time()),
                     'chat': {'id': 77, 'type': 'private'}, 'text': method.text,
                 })
+            if isinstance(method, EditMessageText) and self.channel_update == 2:
+                (home.parent / 'channel-confirmed').write_text(method.text)
+                return True
             raise AssertionError(f'unexpected Telegram method {type(method).__name__}')
 
     session = TestTelegram()
@@ -92,8 +128,20 @@ if not is_legacy and sys.argv[1] == 'upgrade':
 
     nook_bot.bot.session = session
     nook_bot.tg = direct_telegram
-    with suppress(KeyboardInterrupt):
-        asyncio.run(nook_bot.main())
+    if mode == 'v010':
+        async def no_host_monitoring():
+            pass
+
+        # Keep the Telegram dispatcher and job loop live, while preventing
+        # the historical bot from inspecting unrelated services on this host.
+        nook_bot.watch_loop = no_host_monitoring
+        nook_bot.ops_loop = no_host_monitoring
+    try:
+        with suppress(KeyboardInterrupt):
+            asyncio.run(nook_bot.main())
+    finally:
+        if is_legacy:
+            (home / 'memory/last-write').write_text(version)
     raise SystemExit(0)
 if not is_legacy:
     import legacy_migration
@@ -178,14 +226,98 @@ def stage_legacy(base, version, commit):
     return home, source
 
 
+def check_legacy_button(home, source, target, release, service):
+    """Run the published v0.1.1 Telegram updater against an isolated service."""
+    spec = spec_from_file_location('nook_v011_fixture', source / 'nook_update.py')
+    old = module_from_spec(spec)
+    spec.loader.exec_module(old)
+    from tools.start_guard import recover
+
+    revision = release['revision']
+    state = home / 'state.json'
+    original = json.loads(state.read_text())
+    local_mod = (home / 'mods/owner_custom.py').read_bytes()
+    settings_path = nook_update.workspace(home) / 'settings.json'
+    service_systemctl = old.systemctl
+    systemctl = lambda *args, **kwargs: service_systemctl(
+        *(service if arg == 'nook.service' else arg for arg in args), **kwargs)
+    health = old.healthy
+    archive = target.parent / 'candidate-main.tar.gz'
+    with tarfile.open(archive, 'w:gz') as tar:
+        tar.add(target, arcname=f'nook-{revision}')
+
+    def download(url, path, _limit):
+        if url == f'https://api.github.com/repos/{old.REPO}/commits/main':
+            path.write_text(json.dumps({'sha': revision}))
+        else:
+            assert url == f'https://codeload.github.com/{old.REPO}/tar.gz/{revision}'
+            shutil.copyfile(archive, path)
+
+    old_mod_spec = spec_from_file_location('nook_v011_update_menu', home / 'mods/self_update.py')
+    old_mod = module_from_spec(old_mod_spec)
+    with patch.dict(sys.modules, {'nook_update': old}):
+        old_mod_spec.loader.exec_module(old_mod)
+    from mods import Mod
+
+    mod = Mod('self_update', SimpleNamespace(
+        btn=lambda _label, data, _icon, _style: data,
+    ))
+    old_mod.setup(mod)
+    ctx = SimpleNamespace(toast=AsyncMock(), reply=AsyncMock(), edit=AsyncMock())
+    with patch.object(old, 'download', download):
+        asyncio.run(mod.callbacks['check'](ctx))
+    text, rows = ctx.reply.await_args.args
+    assert revision[:10] in text
+    assert rows[0][0].startswith('mod:self_update:apply:')
+    ctx.arg = rows[0][0].split(':')[-1]
+    stage = old.workspace(home) / 'staged' / ctx.arg
+    with patch.object(old, 'systemctl', systemctl):
+        fixture_pid = old.service_matches(home)
+        with patch.object(old_mod, 'service_matches', lambda root, _pid: old.service_matches(root, fixture_pid)):
+            asyncio.run(mod.callbacks['apply'](ctx))
+    ctx.edit.assert_awaited_once()
+    assert old.read_json(old.workspace(home) / 'request.json')['id'] == stage.name
+    old.atomic(stage / 'worker.py', (source / 'nook_update.py').read_bytes())
+    with (patch.object(old, 'systemctl', systemctl),
+          patch.object(old, 'healthy', lambda *args: health(*args, timeout=SUCCESSFUL_START_TIMEOUT, stable=2)),
+          patch.object(old, 'notify') as notify):
+        old.worker(home, stage.name, old.service_matches(home))
+        notify.assert_called_once()
+    assert old.read_json(old.workspace(home) / 'transaction.json')['status'] == 'success'
+    assert settings_path.is_file() is False
+    assert nook_update.update_settings(home)['channel'] is None
+    assert not (home / 'VERSION').exists()  # This was outside the old source allowlist.
+    assert (home / 'mods/owner_custom.py').read_bytes() == local_mod
+    run('timeout', '10', 'bash', '-c', 'until [[ "$(cat "$1")" == "$2" ]]; do sleep .1; done',
+        'nook-fixture', str(home / 'memory/started'), release['version'])
+    current = json.loads(state.read_text())
+    assert all(current.get(key) == value for key, value in original.items())
+    migration._service_action(service, 'stop')
+    old.restore(home)
+
+    # Simulate the old supervisor disappearing during cutover. The new
+    # startup guard must restore the old code instead of invoking _recover.
+    old.plan_source(home, target, revision, stage.with_name('0123456789abcdee'))
+    stage = stage.with_name('0123456789abcdee')
+    old.atomic(stage / 'worker.py', (source / 'nook_update.py').read_bytes())
+    old.apply_files(home, stage.name)
+    assert recover(home)
+    assert not recover(home)
+    assert (home / 'MANIFEST.json').read_bytes() == (source / 'MANIFEST.json').read_bytes()
+    print(f'v0.1.1: original Telegram worker and interrupted rollback passed with {service}', flush=True)
+
+
 def check(base, version, mode, artifact):
     commit = migration.LEGACY_COMMITS[version]
     home, source = stage_legacy(base, version, commit)
     runtime = seed_runtime(home)
-    if mode == 'upgrade':
+    if mode in ('upgrade', 'button', 'v010'):
         python = str(home / '.venv/bin/python')
         run(python, '-m', 'ensurepip')
-        run(python, '-m', 'pip', 'install', '--disable-pip-version-check', 'colorama==0.4.6', timeout=120)
+        packages = ['-r', str(home / 'requirements.txt')] if mode in ('button', 'v010') else []
+        if mode in ('upgrade', 'v010'):
+            packages.append('colorama==0.4.6')
+        run(python, '-m', 'pip', 'install', '--disable-pip-version-check', *packages, timeout=180)
     target = base / 'release'
     target.mkdir()
     nook_update.unpack_zip(artifact, target)
@@ -201,8 +333,11 @@ def check(base, version, mode, artifact):
     config = Path.home() / '.config/systemd/user'
     config.mkdir(parents=True, exist_ok=True)
     unit_file = config / unit
-    unit_contents = (f'[Service]\nWorkingDirectory={home}\n'
-                     f'ExecStart="{home / ".venv/bin/python"}" "{service}" {mode}\n')
+    python = home / '.venv/bin/python'
+    user_home = base / 'user-home'
+    user_home.mkdir(mode=0o700)
+    unit_contents = (f'[Service]\nWorkingDirectory={home}\nEnvironment="HOME={user_home}"\n'
+                     f'ExecStart="{python}" "{service}" {mode}\n')
     unit_file.write_text(unit_contents)
     try:
         run('systemctl', '--user', 'daemon-reload')
@@ -211,17 +346,31 @@ def check(base, version, mode, artifact):
         # Wait until SIGTERM handling is installed before exercising cutover.
         run('timeout', '10', 'bash', '-c', 'until test -s "$1"; do sleep .1; done',
             'nook-fixture', str(home / 'memory/started'))
+        if mode == 'v010':
+            # The original bot answered /jobs and updated its UI state.
+            assert json.loads((home / 'state.json').read_text())['view_msgs'] == [2]
+            assert nook_update.update_settings(home)['channel'] is None
+        if mode == 'button':
+            check_legacy_button(home, source, target, release, unit)
+            return
         backup = base / 'backup'
         journal = migration._journal_path(home)
+
+        def stop_service():
+            migration._service_action(unit, 'stop')
+            if mode == 'v010' and not backup.exists():
+                # Capture the old process's final state after it has stopped.
+                runtime['state.json'] = migration._inventory(home)['state.json']
+
         def check_health(root, _version):
             assert_runtime(root, runtime)
             return migration._wait_healthy(root, unit, release['revision'],
-                                           timeout=25 if mode == 'upgrade' else 12, stable=2)
+                                           timeout=SUCCESSFUL_START_TIMEOUT if mode in ('upgrade', 'v010') else 12, stable=2)
 
         transaction = lambda: migration.migrate_transaction(
             home, source, target, old_revision=commit, target_revision=release['revision'],
             backup=backup, stage=base / 'stage', journal=journal,
-            stop_service=lambda: migration._service_action(unit, 'stop'),
+            stop_service=stop_service,
             start_service=lambda: migration._service_action(unit, 'start'),
             health_check=check_health,
         )
@@ -277,7 +426,7 @@ def check(base, version, mode, artifact):
         assert json.loads((home / 'MANIFEST.json').read_text())['version'] == expected
         assert_runtime(backup, runtime)
         assert unit_file.read_text() == unit_contents
-        if mode == 'upgrade':
+        if mode in ('upgrade', 'v010'):
             original = json.loads((backup / 'state.json').read_text())
             active = json.loads((home / 'state.json').read_text())
             assert all(active.get(key) == value for key, value in original.items())
@@ -292,6 +441,19 @@ def check(base, version, mode, artifact):
         assert (home / 'memory/last-write').read_text() == version
         assert (backup / 'memory/last-write').read_text() == version
         assert migration._user_service(home) == unit
+        if mode == 'v010':
+            assert nook_update.update_settings(home)['channel'] is None
+            for step, mark, expected_text in (
+                (0, 'channel-preview', 'Alpha'), (1, 'channel-confirmed', 'Alpha'),
+            ):
+                (base / f'allow-channel-{step}').touch()
+                marker = base / mark
+                run('timeout', '20', 'bash', '-c', 'until test -s "$1"; do sleep .1; done',
+                    'nook-fixture', str(marker))
+                assert expected_text in marker.read_text()
+                settings = nook_update.update_settings(home)
+                assert settings['channel'] == (None if step == 0 else 'alpha')
+                assert settings['auto_mode'] == 'off'
         print(f'v{version}: {mode} passed with {unit}', flush=True)
     except BaseException:
         subprocess.run(['journalctl', '--user', '-u', unit, '--no-pager', '-n', '50'],
@@ -303,14 +465,114 @@ def check(base, version, mode, artifact):
         run('systemctl', '--user', 'daemon-reload')
 
 
+def check_dependency_update(base, artifact):
+    home = base / 'instance'
+    home.mkdir()
+    nook_update.unpack_zip(artifact, home)
+    (home / 'NOOK_RELEASE.json').unlink()
+    runtime = seed_runtime(home)
+    service = """\
+import os
+from pathlib import Path
+import sys
+import time
+from tools.start_guard import recover
+home = Path.cwd()
+if recover(home):
+    os.execv(sys.executable, [sys.executable, *sys.argv])
+from nook_update import environment_held, heartbeat
+if VERSION == 'new':
+    import colorama
+    assert colorama.__version__ == '0.4.6'
+while environment_held(home):
+    heartbeat(home)
+    time.sleep(.1)
+(home / 'memory/started').write_text(VERSION)
+while True:
+    time.sleep(.1)
+"""
+    (home / 'bot.py').write_text('VERSION = "old"\n' + service)
+    (home / 'requirements.txt').write_text('# old fixture\n')
+    (home / 'requirements-voice.txt').write_text('# old voice fixture\n')
+    python = home / '.venv/bin/python'
+    run(sys.executable, '-m', 'venv', '--without-pip', str(home / '.venv'))
+    nook_update.record_install(home)
+    old_environment = nook_update.environment_identity(home / '.venv')
+    settings = nook_update.save_update_settings(home, channel='stable')
+    ident = 'fedcba9876543210'
+    stage = nook_update.workspace(home) / 'staged' / ident
+    source = stage / 'source'
+    source.mkdir(parents=True)
+    nook_update.unpack_zip(artifact, source)
+    (source / 'NOOK_RELEASE.json').unlink()
+    (source / 'bot.py').write_text('VERSION = "new"\n' + service)
+    (source / 'requirements.txt').write_text('colorama==0.4.6\n')
+    (source / 'requirements-voice.txt').write_text('# old voice fixture\n')
+    manifest = nook_update.read_json(source / 'MANIFEST.json')
+    for name in ('bot.py', *nook_update.REQUIREMENTS):
+        manifest['sha256'][name] = sha256((source / name).read_bytes()).hexdigest()
+    nook_update.json_write(source / 'MANIFEST.json', manifest)
+    plan = nook_update.plan_source(home, source, 'b' * 40, stage, migrate_dependencies=True)
+    plan.update(channel='stable', release_settings=settings)
+    nook_update.json_write(stage / 'plan.json', plan)
+    nook_update.freeze_supervisor(stage)
+    assert nook_update.request(home, ident)
+
+    unit = 'nook-update-fixture-' + sha256(str(base).encode()).hexdigest()[:16] + '.service'
+    unit_path = Path.home() / '.config/systemd/user' / unit
+    unit_path.parent.mkdir(parents=True, exist_ok=True)
+    unit_contents = f'[Service]\nWorkingDirectory={home}\nExecStart="{python}" "{home / "bot.py"}"\n'
+    unit_path.write_text(unit_contents)
+    systemctl = nook_update.systemctl
+    health = nook_update.healthy
+
+    def fixture_systemctl(*args, **kwargs):
+        return systemctl(*(unit if arg == 'nook.service' else arg for arg in args), **kwargs)
+
+    try:
+        # Use the v0.1.1 unit layout without ExecStartPre. The bot entry point
+        # invokes its guard before loading the Python dependencies.
+        fixture_systemctl('daemon-reload')
+        fixture_systemctl('start', 'nook.service')
+        started = home / 'memory/started'
+        run('timeout', '10', 'bash', '-c', 'until test -s "$1"; do sleep .1; done', 'fixture', str(started))
+        with (patch.object(nook_update, 'systemctl', fixture_systemctl),
+              patch.object(nook_update, 'healthy', lambda *args: health(*args, timeout=SUCCESSFUL_START_TIMEOUT, stable=2)),
+              patch.object(nook_update, 'notify') as notify):
+            nook_update.worker(home, ident, nook_update.service_matches(home))
+            notify.assert_called_once()
+        run('timeout', '10', 'bash', '-c', 'until [[ "$(cat "$1")" == "new" ]]; do sleep .1; done',
+            'fixture', str(started))
+        assert nook_update.environment_identity(home / '.venv') != old_environment
+        journal = nook_update.read_json(nook_update.workspace(home) / 'transaction.json')
+        assert journal['status'] == 'success'
+        assert_runtime(Path(journal['snapshot']['root']), runtime)
+        assert_runtime(home, runtime)
+        fixture_systemctl('stop', 'nook.service')
+        nook_update.restore(home)
+        assert nook_update.environment_identity(home / '.venv') == old_environment
+        fixture_systemctl('start', 'nook.service')
+        run('timeout', '10', 'bash', '-c', 'until [[ "$(cat "$1")" == "old" ]]; do sleep .1; done',
+            'fixture', str(started))
+        assert_runtime(home, runtime)
+        assert unit_path.read_text() == unit_contents
+        print('Dependency-changing update, startup gate and rollback passed with user systemd', flush=True)
+    finally:
+        fixture_systemctl('stop', 'nook.service', check=False)
+        unit_path.unlink(missing_ok=True)
+        fixture_systemctl('daemon-reload')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('artifact', type=Path)
     args = parser.parse_args()
-    for version, mode in (('0.1.0', 'upgrade'), ('0.1.1', 'upgrade'), ('0.1.1', 'rollback'),
-                          ('0.1.1', 'offline'), ('0.1.1', 'interrupt')):
+    for version, mode in (('0.1.0', 'v010'), ('0.1.1', 'upgrade'), ('0.1.1', 'rollback'),
+                          ('0.1.1', 'offline'), ('0.1.1', 'interrupt'), ('0.1.1', 'button')):
         with tempfile.TemporaryDirectory(prefix='nook-systemd-') as base:
             check(Path(base), version, mode, args.artifact.resolve())
+    with tempfile.TemporaryDirectory(prefix='nook-update-systemd-') as base:
+        check_dependency_update(Path(base), args.artifact.resolve())
 
 
 if __name__ == '__main__':

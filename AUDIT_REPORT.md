@@ -1,6 +1,122 @@
 # Nook technical audit
 
-## Current findings
+## Independent review scope
+
+Review the signed release path, the legacy updater's restore points, the
+isolated extension broker and policy ownership, and pooled credential and
+session handling. Reproduce the upgrade and rollback with disposable
+accounts and include a long run on a separate VPS. The results below are
+maintainer checks. The Nightly local run completed 206 tests with one optional
+`age` test skipped. Line coverage was 29.4% in `bot.py`, 87.8% in
+`codex_pool.py`, 74.7% in `nook_update.py`, and 62.4% in
+`legacy_migration.py`. The 90% core target remains open.
+
+The local queue benchmark processed 27,136 synthetic jobs in 122 seconds.
+It ran on a shared Linux host with disposable data and no provider requests.
+Long-running VPS validation with actual Telegram and Codex remains open.
+
+GitHub reports required Python 3.11 and 3.12 checks for `main`. The
+`release-prerelease` environment is visible. The maintainer's write-level
+account could not verify a `release-stable` environment or tag protections.
+Verify these settings with repository-admin access before promotion.
+
+## Oldest supported migration
+
+The disposable v0.1.0 scenario traverses the historical and candidate
+Telegram dispatchers on Linux user systemd. It supplies synthetic state,
+a local candidate archive and a stub Telegram transport. It checks legacy
+main retention after cutover and after the channel preview, followed by
+owner confirmation with automatic updates off. The public v0.1.0 release
+predates the updater button, so the supported entry point is the signed
+bootstrap over SSH. Keep the real Telegram and published-release run in the
+pre-promotion checklist.
+
+The release preparation workflow exercises the same isolated user-systemd
+fixtures against the archive it uploads for review or passes to attestation.
+This includes the v0.1.1 Telegram button, the v0.1.0 SSH bridge, dependency
+updates and rollback. These fixtures use simulated Telegram and release
+inputs.
+
+A local Bubblewrap test validates the opted-in port of a data-only function,
+its activation and rollback and the preservation of its legacy data.
+Approval is simulated in that test. Compare behavior with the owner's real
+modules before switching their trusted wrappers.
+
+## Telegram language preference
+
+An aiogram dispatch test rejects language changes from non-owner or group
+callbacks, verifies persistence through layout presets, and checks that
+changing the language leaves legacy update mode and automatic update settings
+unchanged. Release approvals and downgrade callbacks use the same identifiers
+in both languages. The dispatcher exercises English pool strategy selection,
+quota details and the existing account budget callbacks. The pause notice
+explains the distinction between an unavailable quota sample and a confirmed
+reset time. The recovery test checks the notice and verifies that the
+resume call uses the original thread after finding an eligible account.
+The English owner workflow also exercises server status, model selection
+and recurring-task cancellation. Repeating a cancellation leaves the
+durable queue empty.
+
+## Current Codex pool audit
+
+- Same-account quota sampling and turn execution are mutually exclusive
+  inside Nook. Manual credential changes wait for pool I/O. External Codex
+  commands run outside that coordination.
+- Cancellation during process startup waits for the CLI process handle
+  before terminating its process group and restoring credentials.
+- Device sign-in imports credentials into the account registry only after
+  installing a validated login, under the same lock. It preserves other
+  providers' conversations. A failed or cancelled manual switch restores
+  the previous login and registry. Cancellation terminates the CLI's process
+  group before restoring files so a wrapper child cannot overwrite them.
+- Fixtures reject unsafe registry permissions and hard-linked auth files.
+  A resumed turn cannot replace the requested thread with an unexpected
+  ID. Partial responses, malformed output and completed turns suppress
+  automated retry even when a later event reports quota exhaustion. Live
+  token refresh with real accounts remains an acceptance check.
+
+- Pool recovery distinguishes an unavailable quota sample from a confirmed
+  limit. It retries unavailable samples promptly even when a different
+  account has a later reset. The routing fixture checks both the provider
+  error code and lookalike errors from other failures.
+
+- Enabled only by the owner. Routing verifies the quota workspace and
+  explicit backend eligibility, deduplicates workspaces, bounds quota reads,
+  and suppresses retry after observed side effects. Alternate logins do not
+  replace the primary auth file. External provider backups explicitly include
+  the saved logins and exclude generated links.
+- The fixture exercises actual Nook dispatch and Codex CLI protocol via local
+  subprocesses. The Codex CLI 0.171.0-generated protocol schema confirms
+  the quota fields and treats null eligibility as unavailable. A live
+  multi-account soak and independent audit remain open.
+
+## Current update audit
+
+- Signed dependency updates build and validate a separate Python environment
+  while the service runs. Cutover takes a full verified offline snapshot and
+  records both directory identities before the atomic exchange. Recovery
+  checks those identities and restores both source and the old environment.
+- The candidate withholds polling and scheduled tasks while reporting startup
+  health. The snapshot includes local installation data. External provider
+  stores remain on their existing paths. Trusted module setup can still
+  produce effects beyond the updater's control.
+- Bot entry-point tests verify that the candidate waits for the supervisor
+  before claiming work and produces no health signal if Telegram is unavailable.
+- `pip-audit` found no known advisories in the resolved base and voice
+  requirements during the local maintainer check.
+- The exact published v0.1.1 worker has no `_recover` command. The startup
+  guard recognizes it by SHA-256, uses its existing locks and allows the new
+  bot to report health while the historical supervisor is active. If the
+  supervisor was interrupted, the guard restores the old source under both
+  locks. The compatibility code executes only the digest-matched bytes.
+- The disposable Linux user systemd fixture executes the original menu's
+  check and approval handlers, the pinned-revision archive check and the
+  original worker. It runs the updated bot in the fixture installation's
+  venv with v0.1.1's declared dependencies. Telegram transport and GitHub
+  downloads are simulated. It covers local data, channel preservation,
+  and rollback of an interrupted transaction.
+
+## Earlier findings
 
 - Iteration 5 introduces staged local extensions. Draft code never loads into
   the Telegram process. Linux namespace isolation, explicit owner approvals,

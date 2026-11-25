@@ -8,7 +8,7 @@ Nook is a self-hosted Telegram assistant that helps you look after a Linux serve
 
 [Русская инструкция](docs/README.ru.md) · [Security](SECURITY.md) · [Contributing](CONTRIBUTING.md) · [MIT license](LICENSE)
 
-> **Early preview — Alpha candidate `0.1.2-alpha.1` (not published).** The Telegram interface and installation wizard are currently in Russian. Documentation is available in English and Russian. Full installation of this renamed release on a fresh VPS has not yet been verified; use a separate test server first.
+> **Public Alpha `0.1.2-alpha.1`.** The Telegram interface and installation wizard are currently in Russian. Documentation is available in English and Russian. Full installation of this release on a fresh VPS has not yet been verified; use a separate test server first.
 
 Changes in this release: [changelog](docs/CHANGELOG.md).
 
@@ -75,24 +75,30 @@ We have not run all three projects under the same workload. The process snapshot
 
 ## Update without reinstalling
 
-Open **More → Mods → Обновить Nook** to check GitHub and confirm an update. Nook preserves your configuration, memory, conversations, keys, and custom extensions. Conflicting local source changes stop the update. It backs up affected code, waits for current tasks, and uses an independent supervisor to restart the bot and roll back failed startup. Dependency or data-format migrations require separate work.
+For a managed release, open **More → Mods → Updates and backups → Check for updates**, review the version, and select **Install with backup**. Nook preserves your configuration, memory, conversations, keys, and custom extensions. Conflicting local source changes stop the update. A separate supervisor waits for current tasks, restarts the bot, checks startup and rolls back if it fails.
 
-[Update and recovery guide](docs/UPDATES.md) · CLI: `bin/nook-update check`. Automatic restarts support the installer's user `nook.service`; older installations need a reviewed initial migration. Do not rerun the installer to update.
+Original v0.1.1 installations use **More → Mods → Обновить Nook** for compatible updates from `main`. Original v0.1.0 installations need the one-time signed SSH migration. See the [upgrade guide](docs/UPDATES.md#upgrade-an-existing-bot).
+
+The Nightly candidate supports signed compatible Python dependency changes. It prepares a new environment and verifies a full local backup before switching. Data-format changes require their own migration.
+
+In the candidate, choose **Menu → Settings → English** for the main menu, interface settings, release updates and the Codex pool. Some operational notifications, commands, installer screens and mods still use Russian.
+
+[Update and recovery guide](docs/UPDATES.md) · CLI: `bin/nook-update check`. Automatic restarts use the installer's user `nook.service`. See the guide for the available paths from v0.1.0 and v0.1.1. Do not rerun the installer to update.
 
 ## Install
 
 Use an interactive SSH terminal on Ubuntu 24.04 or Debian 12+ (Ubuntu 22.04 needs a separately installed Python 3.11+), with Python 3.11+, systemd, and a regular user who can use sudo. Other distributions and containers without user systemd need manual setup. Allow approximately 2 GB RAM for charts and optional voice recognition; actual usage depends on your workload.
 
-Install with one command from an interactive SSH terminal:
+Install from an interactive SSH terminal. Select Alpha explicitly while Stable has no published versions.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Sppqq/nook/main/bootstrap.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Sppqq/nook/main/bootstrap.sh | bash -s -- --channel alpha
 ```
 
 The wizard offers a provider preset, optional voice recognition, a channel choice (Stable by default), an optional pin to the exact downloaded source version, a configuration preview, hidden token entry, and progress indicators. Select a channel and, when needed, fetch an exact source version explicitly:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Sppqq/nook/main/bootstrap.sh | bash -s -- --channel beta --version 1.2.0-beta.1
+curl -fsSL https://raw.githubusercontent.com/Sppqq/nook/main/bootstrap.sh | bash -s -- --channel alpha --version 0.1.2-alpha.1
 ```
 
 `--channel` selects the newest eligible published release and sets the new instance's future update policy. `--version` installs an exact published version. Both verify Sigstore provenance using a current GitHub CLI (`gh`, no login needed). If the channel is empty, the installer reports the available choices. Use `--dev` to install from the development branch explicitly. To inspect the source first:
@@ -120,7 +126,7 @@ Open your bot in Telegram after setup. Do not run two instances with the same Te
 
 ```bash
 bash install.sh --timezone Europe/London
-bash install.sh --channel beta --version 1.2.0-beta.1
+bash install.sh --channel alpha --version 0.1.2-alpha.1
 bash install.sh --target "$HOME/my-nook"
 bash install.sh --skip-antigravity --skip-mercury  # Codex only
 bash install.sh --skip-codex --skip-antigravity    # Mercury only
@@ -175,7 +181,8 @@ The project registry starts empty at `memory/registry.json`. Ask Nook to invento
 - Trusted Python mods live in `mods/`; see `mods/_example.py`.
 - Agent instructions and skills live in `AGENTS.md` and `.agents/skills/`.
 - `owner_api`, `openbot_bridge`, and `codex_accounts` are disabled by default.
-- Account switching requires a separate compatible `codex-auth` utility (`list`, `switch`, and `import`). That utility is not bundled. Standard Codex login is independent of it.
+- Account switching uses the separately installed `codex-auth` utility. Follow its login guide under the Linux user that runs Nook to save the accounts, then open the pool. Standard Codex login works independently. [Codex Auth login guide](https://github.com/Loongphy/codex-auth/blob/main/docs/commands/login.md)
+- Enable the optional pool under **Limits → Codex pool → Pool settings**. It uses logins saved by a compatible `codex-auth` and requires Codex CLI to report account IDs and live quota eligibility. Choose an order and set per-account limits before routing tasks. A 0% budget excludes an account. Reset notices and weekly warm-up are optional. Warm-up sends one short real request and can consume quota. Use only accounts and workspaces you are authorized to use.
 - OpenBot, Status Board, backups, DNS, GitHub, and MCP integrations need separate configuration and credentials. They are not preconfigured services in this release.
 
 The Russian menu labels for interface customization are `Меню → Настройки` (Menu → Settings), then `Под ответами` (Answers), `Главное меню` (Main menu), or `Оформление` (Appearance). Changes save immediately. Hidden sections remain available under `Ещё` (More); interface presets do not change monitoring or provider settings.
@@ -192,7 +199,7 @@ bash install.sh --check
 
 The release builder uses Git's tracked file list, rejects private runtime paths and common credential patterns, and creates reproducible ZIP/JSON bundles plus checksums under `dist/`. Checksums detect corruption; they do not authenticate a download server.
 
-See [Architecture](docs/ARCHITECTURE.md), [Contributing](CONTRIBUTING.md), and [Changelog](CHANGELOG.md). This preview has automated tests, not an independent security audit or a complete clean-VPS acceptance test. Rollback monitoring depends on the bot remaining available. CLI providers and Telegram features may change independently.
+See [Architecture](docs/ARCHITECTURE.md), [Contributing](CONTRIBUTING.md), and [Changelog](CHANGELOG.md). This preview has automated tests, not an independent security audit or a complete clean-VPS acceptance test. The update supervisor checks startup and restores managed code if startup fails. Keep a separate backup for recovery beyond the update transaction. CLI providers and Telegram features may change independently.
 
 ## License
 

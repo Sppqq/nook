@@ -29,7 +29,7 @@ import urllib.request
 # BEGIN PINNED LOADER
 files = {
     'installer_source.py': ('586728e8f21268d42ec802a13faa099fadfa92aa', 'baa0a9a0ef0181cbea8c6cdf4fb4a04527b5c930d25eb1c135f28c6ffe924b5b'),
-    'nook_update.py': ('a74a778ba29a78599bbb559ac09d6b610c266f8c', '8bfda49d62418e8015f534698b16c040ed2db961a71d9bd55a8b2ccf16433c78'),
+    'nook_update.py': ('fb07491100714cce52dcdbf8bc4a36c0b100b894', 'fb6e7bc620cd09c19a6a8f8a634f4249da0080df89c65ccd6975171a8bc2c8fb'),
     'release_channels.py': ('9cdcc152efa696fb2d6d0d4ab0798d253ead723e', '7bdda296f51f59ff61e25dc8a8b6fb9b784620ca2fb6bf119895e34faae501f6'),
 }
 # END PINNED LOADER

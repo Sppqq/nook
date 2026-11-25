@@ -1,6 +1,13 @@
 # Changelog
 
-## 0.1.2-alpha.1 — candidate, not published
+## 0.1.2-nightly.20261125 — candidate
+
+- Add optional Codex account pooling with per-account quotas and safe conversation continuation.
+- Adopt the updater from the original v0.1.1 Telegram menu and preserve the current channel.
+- Stage Python dependency changes in signed upgrades and roll back code and environment if startup fails.
+- Offer English for the main menus, release updates and Codex account controls through Telegram settings.
+
+## 0.1.2-alpha.1 — published
 
 - Add Stable, Release Candidate, Beta, Alpha and Nightly channel selection with per-instance settings and SemVer version pins.
 - Verify GitHub Release asset digests and source manifests before staging updates; keep explicit downgrade confirmation.

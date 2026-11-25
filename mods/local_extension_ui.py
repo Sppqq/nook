@@ -12,16 +12,17 @@ def version_key(version):
 
 
 def setup(mod):
+    t = mod.text
     store = Store(Path(__file__).resolve().parents[1])
 
-    @mod.button('Локальные расширения', icon='mods', where='mods')
+    @mod.button('Локальные расширения', icon='mods', where='mods', english='Local extensions')
     @mod.command('extensions', 'версии локальных расширений')
     async def catalog(ctx):
         entries = await asyncio.to_thread(store.catalog)
         if not entries:
-            return await ctx.reply('Локальных расширений пока нет.')
+            return await ctx.reply(t('Локальных расширений пока нет.', 'No local extensions yet.'))
         rows = [[mod.btn(f'{kind} · {name}', 'v', f'{kind}:{name}')] for kind, name in entries[:12]]
-        await ctx.reply('Локальные расширения', rows)
+        await ctx.reply(t('Локальные расширения', 'Local extensions'), rows)
 
     @mod.callback('v')
     async def versions(ctx):
@@ -29,12 +30,14 @@ def setup(mod):
         state = await asyncio.to_thread(store.status, kind, name)
         rows = []
         for version in list(reversed(state['versions']))[:5]:
-            op, label = ('a', 'Активировать') if state['versions'][version]['checked'] else ('t', 'Проверить')
+            op, label = (('a', t('Активировать', 'Activate')) if state['versions'][version]['checked']
+                         else ('t', t('Проверить', 'Test')))
             rows.append([mod.btn(f'{label} {version}', op, f'{kind}:{name}:{version_key(version)}')])
         if state['active']:
-            rows.append([mod.btn('Откатить', 'r', ctx.arg)])
-        active = state['active'] or 'нет'
-        await ctx.reply(f'{kind} · {name}\nАктивная версия: {active}', rows)
+            rows.append([mod.btn(t('Откатить', 'Roll back'), 'r', ctx.arg)])
+        active = state['active'] or t('нет', 'none')
+        status = t('Активная версия', 'Active version')
+        await ctx.reply(f'{kind} · {name}\n{status}: {active}', rows)
 
     async def apply(ctx, operation):
         try:
@@ -44,9 +47,10 @@ def setup(mod):
             if len(matches) != 1:
                 raise ExtensionError('Версия больше недоступна.')
             await asyncio.to_thread(operation, kind, name, matches[0])
-            await ctx.edit(f'Готово · {kind} · {name} · {matches[0]}')
+            await ctx.edit(f"{t('Готово', 'Done')} · {kind} · {name} · {matches[0]}")
         except (ExtensionError, UpdateError, OSError, ValueError):
-            await ctx.reply('Действие отклонено. Проверь версию, результаты проверки и политику владельца.')
+            await ctx.reply(t('Действие отклонено. Проверь версию, результаты проверки и политику владельца.',
+                              'Action denied. Check the version, test results and owner policy.'))
 
     @mod.callback('t')
     async def test(ctx):
@@ -61,6 +65,8 @@ def setup(mod):
         try:
             kind, name = ctx.arg.split(':', 1)
             active = await asyncio.to_thread(store.rollback, kind, name)
-            await ctx.edit(f'Активная версия: {active or "нет"}')
+            active = active or t('нет', 'none')
+            await ctx.edit(f"{t('Активная версия', 'Active version')}: {active}")
         except (ExtensionError, UpdateError, OSError, ValueError):
-            await ctx.reply('Откат отклонён. Проверь состояние расширения.')
+            await ctx.reply(t('Откат отклонён. Проверь состояние расширения.',
+                              'Rollback denied. Check the extension status.'))

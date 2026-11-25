@@ -5,6 +5,8 @@ from pathlib import Path
 from unittest.mock import patch
 from types import SimpleNamespace
 import urllib.error
+
+from release_channels import channel_for_version
 spec=importlib.util.spec_from_file_location('installer', Path(__file__).resolve().parents[1] / 'install.py')
 m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
 class InstallerTests(unittest.TestCase):
@@ -25,6 +27,7 @@ class InstallerTests(unittest.TestCase):
   (source/'memory/notes.md').write_text('private memory')
   (source/'config.json').write_text('private config')
   (source/'.env').write_text('private environment')
+  (source/'.git').write_text('gitdir: /path/to/repository/worktrees/example\n')
   (source/'.codex').mkdir()
   (source/'.codex/auth.json').write_text('private provider session')
   with patch.object(m,'SOURCE',source):
@@ -34,6 +37,7 @@ class InstallerTests(unittest.TestCase):
   self.assertFalse((target/'memory/notes.md').exists())
   self.assertFalse((target/'config.json').exists())
   self.assertFalse((target/'.env').exists())
+  self.assertFalse((target/'.git').exists())
   self.assertFalse((target/'.codex/auth.json').exists())
   self.assertTrue((target/'mods/custom.py').is_file())
  def test_manifest_version_must_match_canonical_version(self):
@@ -88,16 +92,17 @@ class InstallerTests(unittest.TestCase):
    codex.assert_called_once();agy.assert_called_once();mercury.assert_called_once();run.assert_called_once()
    self.assertIn('--device-auth',run.call_args.args[0])
  def test_full_install_resume_and_nonoverwrite(self):
+  channel = channel_for_version((m.SOURCE / 'VERSION').read_text().strip())
   tokenfile=self.home/'token';tokenfile.write_text('123456:'+('a'*35));calls=[]
   def fake_run(args,**kw):
    calls.append([str(a) for a in args])
    if len(args)>2 and args[1:3]==['-m','venv']:
     py=Path(args[3])/'bin/python';py.parent.mkdir(parents=True);py.write_text('mock-python')
-  argv=['install.py','--dev','--accept-terms','--target',str(self.target),'--no-system-packages','--no-start','--owner-id','123456','--token-file',str(tokenfile),'--channel','alpha']
+  argv=['install.py','--dev','--accept-terms','--target',str(self.target),'--no-system-packages','--no-start','--owner-id','123456','--token-file',str(tokenfile),'--channel',channel]
   with patch.object(m.os,'getuid',return_value=1001),patch.object(m.getpass,'getuser',return_value='friend'),patch.object(m,'run',side_effect=fake_run),patch.object(m,'setup_providers') as providers,patch.object(sys,'argv',argv):
    m.main();providers.assert_called_once()
    from nook_update import update_settings
-   self.assertEqual(update_settings(self.target)['channel'],'alpha')
+   self.assertEqual(update_settings(self.target)['channel'],channel)
    cfg=(self.target/'config.json').read_bytes();self.assertEqual(json.loads(cfg)['owner_id'],123456)
    service=self.home/'.config/systemd/user/nook.service';self.assertIn(str(self.target),service.read_text())
    self.assertNotIn('start',[c[2] for c in calls if len(c)>2 and c[0]=='systemctl'])
@@ -115,11 +120,11 @@ class InstallerTests(unittest.TestCase):
    self.assertEqual(json.loads((self.target/'nodes.json').read_text()), [])
    # A Mercury-only installation must work on its first conversation.
    mercury_target=self.home/'mercury-only'
-   mercury_argv=argv+['--skip-codex','--skip-antigravity','--target',str(mercury_target),'--channel','alpha']
+   mercury_argv=argv+['--skip-codex','--skip-antigravity','--target',str(mercury_target)]
    with patch.object(sys,'argv',mercury_argv),patch.object(m,'setup_service'):
     m.main()
    self.assertEqual(json.loads((mercury_target/'config.json').read_text())['model'],'mercury-3')
-   self.assertEqual(update_settings(mercury_target)['channel'],'alpha')
+   self.assertEqual(update_settings(mercury_target)['channel'],channel)
 
 class WizardTests(unittest.TestCase):
  def args(self, **kwargs):

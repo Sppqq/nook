@@ -562,11 +562,11 @@ def _safe_target(root, name):
     return path
 
 
-def exchange_directories(left, right):
-    """Atomically exchange sibling directories on Linux or fail before mutation."""
+def exchange_directories(left, right, *, require_siblings=True):
+    """Atomically exchange directories on Linux or fail before mutation."""
     left, right = Path(left), Path(right)
     if (left.is_symlink() or right.is_symlink() or not left.is_dir() or not right.is_dir()
-            or left.parent.resolve() != right.parent.resolve()
+            or require_siblings and left.parent.resolve() != right.parent.resolve()
             or left.stat().st_dev != right.stat().st_dev):
         raise MigrationError('Атомарное переключение требует соседние каталоги на одной файловой системе.')
     libc = ctypes.CDLL(None, use_errno=True)
@@ -621,8 +621,9 @@ def _check_legacy_queue(home):
     workspace = nook_update.path_at(home, 'spool/updates')
     request = nook_update.path_at(workspace, 'request.json')
     transaction = nook_update.path_at(workspace, 'transaction.json')
-    if (request.exists() or transaction.exists()
-            and nook_update.read_json(transaction).get('status') not in ('success', 'rolled_back')):
+    if request.exists():
+        raise MigrationError('Сначала заверши или отмени прежнее обновление Nook.')
+    if transaction.exists() and _read_json(transaction).get('status') not in ('success', 'rolled_back'):
         raise MigrationError('Сначала заверши или отмени прежнее обновление Nook.')
 
 

@@ -7,6 +7,8 @@ import json
 import os
 from pathlib import Path
 import shutil
+import subprocess
+import sys
 import tarfile
 import tempfile
 import time
@@ -32,6 +34,7 @@ class UpdateTests(unittest.TestCase):
         self.stage.mkdir(parents=True)
         self.files = {'bot.py': 'print("old")\n', 'requirements.txt': 'example==1\n',
                       'requirements-voice.txt': '# optional\n', 'mods/bundled.py': 'VALUE=1\n',
+                      'tools/start_guard.py': '# installed guard\n', 'nook_update.py': '# installed updater\n',
                       'AGENTS.md': 'source instructions\n', '.codex/config.toml': '# provider\n',
                       'templates/runtime/state.json': '{}\n', '.agents/skills/demo/SKILL.md': 'demo\n'}
         self.publish()
@@ -113,6 +116,85 @@ class UpdateTests(unittest.TestCase):
         self.publish()
         with self.assertRaisesRegex(u.UpdateError, 'удаляет'):
             self.plan()
+
+    def plan_dependency_update(self):
+        installed_manifest = self.home / 'MANIFEST.json'
+        u.json_write(installed_manifest, dict(u.read_json(installed_manifest), version='0.9.0'))
+        u.record_install(self.home)
+        self.publish(**{'requirements.txt': '# offline dependency fixture\n',
+                        'tools/start_guard.py': '# fixture\n'})
+        self.stage.rmdir()
+        settings = u.save_update_settings(self.home, channel='stable')
+        release = {'version': '1.0.0', 'channel': 'stable'}
+
+        def fetch(_release, stage):
+            source = stage / 'source'
+            shutil.copytree(self.source, source)
+            manifest = u.read_json(source / 'MANIFEST.json')
+            manifest.update(version='1.0.0', environment_update=1)
+            u.json_write(source / 'MANIFEST.json', manifest)
+            return source, 'b' * 40
+
+        with patch.object(u, 'list_releases', return_value=[]), \
+             patch.object(u, 'select_release', return_value=release), \
+             patch.object(u, 'fetch_release_source', side_effect=fetch), \
+             patch.object(u.uuid, 'uuid4', return_value=SimpleNamespace(hex=self.ident)):
+            plan = u.prepare_release(self.home)
+        self.assertEqual(plan['release_settings'], settings)
+        self.assertIn('environment_manifest', plan)
+        return plan
+
+    def test_dependency_update_prepares_real_venv_and_recovers_after_interruption(self):
+        from tools.start_guard import recover
+
+        plan = self.plan_dependency_update()
+        live = self.home / '.venv'
+        subprocess.run([sys.executable, '-m', 'venv', '--without-pip', str(live)], check=True)
+        (live / 'local-marker').write_text('owner environment')
+        old_identity = u.environment_identity(live)
+        u.freeze_supervisor(self.stage)
+        u.request(self.home, self.ident)
+        environment = u.prepare_environment(self.home, self.stage, plan)
+        self.assertEqual(u.environment_identity(live), old_identity)
+        txn = u.apply_files(self.home, self.ident, environment=environment)
+        self.assertEqual(u.environment_identity(live), environment[0]['new'])
+        self.assertFalse((live / 'local-marker').exists())
+        self.assertTrue(u.environment_held(self.home))
+        snapshot = Path(txn['snapshot']['root'])
+        self.assertEqual((snapshot / 'memory/notes.md').read_text(), 'owner memory')
+        self.assertEqual((snapshot / '.venv/local-marker').read_text(), 'owner environment')
+        self.assertEqual(snapshot.parent.stat().st_mode & 0o777, 0o700)
+        self.assert_private()
+        self.assertTrue(recover(self.home))
+        self.assertEqual(u.environment_identity(live), old_identity)
+        self.assertEqual((live / 'local-marker').read_text(), 'owner environment')
+        self.assertEqual((self.home / 'requirements.txt').read_text(), 'example==1\n')
+        self.assertFalse(u.environment_held(self.home))
+        self.assertFalse(recover(self.home))
+        self.assert_private()
+
+    def test_dependency_build_failure_leaves_running_bot_unchanged(self):
+        from legacy_migration import MigrationError
+
+        self.plan_dependency_update()
+        (self.home / '.venv').mkdir()
+        u.request(self.home, self.ident)
+        with patch.object(u, 'systemctl') as systemctl, \
+             patch.object(u, 'service_matches', return_value=123), \
+             patch.object(u, 'environment_service_matches'), patch.object(u, 'notify'), \
+             patch('legacy_migration.build_staged_environment', side_effect=MigrationError('offline')):
+            with self.assertRaisesRegex(u.UpdateError, 'offline'):
+                u.worker(self.home, self.ident, 123)
+        systemctl.assert_not_called()
+        self.assertFalse((u.workspace(self.home) / 'transaction.json').exists())
+        self.assertFalse(u.environment_work(self.home, self.ident).exists())
+        self.assert_private()
+
+    def test_dependency_update_refuses_modified_local_requirements(self):
+        (self.home / 'requirements-voice.txt').write_text('local-voice==1\n')
+        self.publish(**{'requirements.txt': 'example==2\n'})
+        with self.assertRaisesRegex(u.UpdateError, 'местные правки'):
+            u.plan_source(self.home, self.source, 'b' * 40, self.stage, migrate_dependencies=True)
 
     def test_late_edit_and_tampered_stage_refused(self):
         self.publish(**{'bot.py': 'print("new")\n'})
@@ -274,6 +356,35 @@ class UpdateTests(unittest.TestCase):
         with patch.object(u, 'systemctl', return_value=SimpleNamespace(stdout='WorkingDirectory=/wrong\nMainPID=123\nActiveState=active')):
             with self.assertRaises(u.UpdateError):
                 u.service_matches(self.home, 123)
+
+    def test_restarted_worker_rolls_back_interrupted_update_before_start(self):
+        self.publish(**{'bot.py': 'print("new")\n'})
+        self.plan()
+        u.apply_files(self.home, self.ident)
+        calls = []
+
+        def service(*args):
+            calls.append(args)
+            if args[0] == 'show':
+                return SimpleNamespace(stdout=str(self.home) + '\n')
+            if args[0] == 'start':
+                self.assertEqual((self.home / 'bot.py').read_text(), 'print("old")\n')
+
+        with patch.object(u, 'systemctl', side_effect=service), \
+             patch.object(u, 'service_matches', return_value=123), patch.object(u, 'notify'):
+            u.worker(self.home, self.ident, 123)
+        self.assertEqual([call[0] for call in calls], ['show', 'stop', 'start'])
+        self.assertEqual(u.read_json(u.workspace(self.home) / 'transaction.json')['status'], 'rolled_back')
+        self.assert_private()
+
+    def test_restarted_worker_starts_old_service_after_interrupted_stop(self):
+        u.json_write(self.stage / 'stop-intent.json', {'id': self.ident})
+        with patch.object(u, 'systemctl', return_value=SimpleNamespace(stdout=str(self.home) + '\n')) as command, \
+             patch.object(u, 'service_matches', return_value=123), patch.object(u, 'notify'):
+            u.worker(self.home, self.ident, 123)
+        self.assertEqual([call.args[0] for call in command.call_args_list], ['show', 'start'])
+        self.assertFalse((u.workspace(self.home) / 'transaction.json').exists())
+        self.assert_private()
 
     def test_fresh_health_requires_matching_revision_pid_and_no_failed_mods(self):
         u.json_write(self.home / u.STATE, dict(u.baseline(self.home), revision='new'))
@@ -557,7 +668,8 @@ class UpdateModTests(unittest.IsolatedAsyncioTestCase):
             def launch(*args):
                 self.assertTrue(all(lane.lock.locked() for lane in lanes))
                 raise u.UpdateError('test launch refusal')
-            with patch.object(mod, 'get_plan'), patch.object(mod, 'launch', side_effect=launch) as start:
+            with patch.object(mod, 'get_plan', return_value=(None, {})), \
+                 patch.object(mod, 'launch', side_effect=launch) as start:
                 await pending()
                 start.assert_not_called()
                 lanes[0].current = None

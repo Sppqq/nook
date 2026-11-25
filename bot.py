@@ -33,6 +33,7 @@ os.umask(0o077)
 
 import guard
 import antigravity_limits
+from codex_pool import Pool as CodexPool, QUOTA_ERROR as POOL_QUOTA_ERROR, REFRESH as POOL_REFRESH, owned_path
 import mods as modsys
 import job_scheduler
 from agent_process import read_tail, stop_process_group
@@ -621,11 +622,28 @@ def context_tokens():
         return None
 
 
-async def run_codex(prompt, thread_id=None, images=(), on_step=None, run: Run = None, timeout=USER_TIMEOUT):
+def active_codex_pool():
+    mod = REG.mods.get("codex_pool")
+    pool = getattr(mod, "pool", None)
+    return pool if pool is not None and pool.enabled() else None
+
+
+async def run_codex(prompt, thread_id=None, images=(), on_step=None, run=None, timeout=USER_TIMEOUT):
+    pool = active_codex_pool()
+    if pool is not None:
+        return await pool.run(_run_codex, prompt, thread_id, images, on_step, run or Run(),
+                              timeout, CFG.get("model"))
+    return await _run_codex(prompt, thread_id, images, on_step, run, timeout)
+
+
+async def _run_codex(prompt, thread_id=None, images=(), on_step=None, run: Run = None,
+                     timeout=USER_TIMEOUT, *, account_env=None):
     """Запустить codex exec (или resume); вернуть (thread_id, final_text, error)."""
     out_file = os.path.join(HOME, "spool", f"last-{uuid.uuid4().hex[:8]}.txt")
     cmd = [CODEX, "exec", "--json", "--skip-git-repo-check", "-C", HOME,
            "--dangerously-bypass-approvals-and-sandbox", "-o", out_file]
+    if account_env is not None:
+        cmd += ["-c", 'cli_auth_credentials_store="file"', "-c", 'model_provider="openai"']
     if CFG.get("model"):
         cmd += ["-m", CFG["model"]]
     if CFG.get("effort"):
@@ -641,8 +659,13 @@ async def run_codex(prompt, thread_id=None, images=(), on_step=None, run: Run = 
     run_id = uuid.uuid4().hex[:12]
     if thread_id:
         RUN_THREADS[run_id] = thread_id
+    env = codex_env(run_id)
+    if account_env is not None:
+        env.pop("OPENAI_API_KEY", None)
+        env.pop("CODEX_API_KEY", None)
+        env.update(account_env)
     proc = await asyncio.create_subprocess_exec(
-        *cmd, cwd=HOME, env=codex_env(run_id), start_new_session=True, limit=16 * 1024 * 1024,
+        *cmd, cwd=HOME, env=env, start_new_session=True, limit=16 * 1024 * 1024,
         stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
     run.proc = proc
     new_thread, last_msg, errors = thread_id, "", []
@@ -653,24 +676,48 @@ async def run_codex(prompt, thread_id=None, images=(), on_step=None, run: Run = 
         async for raw in proc.stdout:
             try:
                 ev = json.loads(raw)
-            except json.JSONDecodeError:
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                run.effects_possible = True
+                continue
+            if not isinstance(ev, dict):
+                run.effects_possible = True
                 continue
             et = ev.get("type", "")
             if et == "thread.started":
-                new_thread = ev.get("thread_id") or new_thread
+                reported = ev.get("thread_id")
+                if not isinstance(reported, str) or not reported or (new_thread and reported != new_thread):
+                    run.effects_possible = True
+                    errors.append(ui_text("Codex вернул другой или некорректный сеанс.",
+                                          "Codex returned a different or invalid session."))
+                    continue
+                new_thread = reported
                 RUN_THREADS[run_id] = new_thread
             elif et in ("item.started", "item.completed"):
-                item = ev.get("item", {})
-                if item.get("type") not in {"reasoning", "agent_message", "todo_list"}:
+                item = ev.get("item")
+                if not isinstance(item, dict):
                     run.effects_possible = True
-                if et == "item.completed" and item.get("type") == "agent_message":
-                    last_msg = item.get("text", "")
+                    continue
+                kind = item.get("type")
+                if kind not in ("reasoning", "agent_message", "todo_list"):
+                    run.effects_possible = True
+                if not isinstance(kind, str):
+                    continue
+                if et == "item.completed" and kind == "agent_message":
+                    text = item.get("text")
+                    if not isinstance(text, str):
+                        run.effects_possible = True
+                        continue
+                    last_msg = text
                 if on_step:
                     line = describe_item(item, et == "item.started")
                     if line:
                         await on_step(line)
             elif et in ("error", "turn.failed"):
                 errors.append(str(ev.get("message") or ev.get("error")))
+            elif et != "turn.started":
+                # A completed turn or unrecognized event is insufficient
+                # evidence that replaying the same request is safe.
+                run.effects_possible = True
 
     async def complete():
         proc.stdin.write(prompt.encode())
@@ -707,6 +754,8 @@ async def run_codex(prompt, thread_id=None, images=(), on_step=None, run: Run = 
     if proc.returncode not in (0, None) and not final and not errors:
         errors.append(stderr.strip()[-800:] or f"codex exit {proc.returncode}")
     err = "; ".join(e for e in errors if e) or None
+    if err and final:
+        run.effects_possible = True
     if err and re.search(r"401|unauthori|log ?in|refresh.?token|expired", err + stderr[-2000:], re.I):
         err += "\n\n⚠️ Похоже, слетела авторизация Codex — нажми «Войти в Codex»"
     return new_thread, final, err
@@ -1070,7 +1119,7 @@ def fallback_active():
 
     if is_antigravity_model(CFG.get("model")):  # принудительная антигравити — без отката на Mercury
         return False
-    return STATE.get("fallback_until", 0) > time.time()
+    return STATE.get("fallback_until", 0) > time.time() and bool(mercury_key())
 
 
 def engine_for(thread_id=None):
@@ -1098,10 +1147,17 @@ async def run_agent(prompt, thread_id=None, images=(), on_step=None, run=None, t
 CODEX_SESSIONS = os.path.expanduser("~/.codex/sessions")
 
 
-async def limits_live():
-    """Спросить лимиты у codex app-server (JSON-RPC по stdio)."""
+async def read_codex_limits(account_env=None):
+    """Read rate limits from the selected Codex login via app-server."""
+    cmd = [CODEX, "app-server"]
+    env = codex_env()
+    if account_env is not None:
+        cmd += ["-c", 'cli_auth_credentials_store="file"', "-c", 'model_provider="openai"']
+        env = {key: value for key, value in env.items()
+               if key in ("HOME", "PATH", "LANG", "LC_ALL", "SSL_CERT_FILE", "SSL_CERT_DIR")}
+        env.update(account_env)
     proc = await asyncio.create_subprocess_exec(
-        CODEX, "app-server", env=codex_env(), start_new_session=True, limit=4 * 1024 * 1024,
+        *cmd, env=env, start_new_session=True, limit=4 * 1024 * 1024,
         stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
     try:
         for m in ({"id": 1, "method": "initialize", "params": {"clientInfo": {"name": "nook", "version": "1"}}},
@@ -1120,9 +1176,37 @@ async def limits_live():
                     if "error" in ev:
                         raise RuntimeError(ev["error"].get("message", "error"))
                     return ev["result"]
-        r = await asyncio.wait_for(read(), 20)
+        result = await asyncio.wait_for(read(), 20)
+        if not isinstance(result, dict):
+            raise RuntimeError("Codex closed the quota connection")
+        return result
     finally:
         await stop_process_group(proc)
+
+
+async def codex_pool_warmup(account_env, model):
+    cmd = [CODEX, "exec", "--ephemeral", "--ignore-user-config", "--ignore-rules",
+           "--skip-git-repo-check", "--sandbox", "read-only", "--disable", "shell_tool",
+           "--disable", "hooks", "--disable", "plugins", "-c", 'web_search="disabled"',
+           "-c", 'cli_auth_credentials_store="file"', "-c", 'model_provider="openai"',
+           "-c", 'model_reasoning_effort="low"']
+    if model:
+        cmd.extend(("-m", model))
+    env = {key: os.environ[key] for key in
+           ("HOME", "PATH", "LANG", "LC_ALL", "SSL_CERT_FILE", "SSL_CERT_DIR") if key in os.environ}
+    env.update(account_env)
+    with tempfile.TemporaryDirectory(prefix="nook-codex-warmup-") as cwd:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd, "Reply with just OK.", cwd=cwd, env=env, start_new_session=True,
+            stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+        try:
+            return await asyncio.wait_for(proc.wait(), 45) == 0
+        finally:
+            await stop_process_group(proc)
+
+
+async def limits_live():
+    r = await read_codex_limits()
     rl = r["rateLimits"]
     win = lambda w: w and {"used": w["usedPercent"], "mins": w["windowDurationMins"], "reset": w["resetsAt"]}
     return {"primary": win(rl.get("primary")), "secondary": win(rl.get("secondary")),
@@ -1166,6 +1250,24 @@ async def get_limits(max_age=60):
     """Лимиты: из памяти, если свежие, иначе живой запрос (≈1 с), при ошибке — из логов."""
     if FORCE.get():
         max_age = 0
+    pool = active_codex_pool()
+    accounts = pool.accounts() if pool else []
+    if accounts:
+        model = CFG.get("model")
+        await pool.refresh(accounts, model, force=not max_age)
+        now = time.time()
+        statuses = [pool.status(account, model, now) for account in accounts if pool.cap(account) > 0]
+        ready = sum(status == "ready" for status, _, _ in statuses)
+        unknown = sum(status in ("unknown", "auth") for status, _, _ in statuses)
+        next_checks = [reset for status, _, reset in statuses if status == "quota"]
+        if unknown or not next_checks:
+            next_checks.append(now + POOL_REFRESH)
+        text = ui_text(f"Пул Codex · доступны {ready} из {len(statuses)}",
+                       f"Codex pool · {ready} of {len(statuses)} available")
+        if unknown:
+            text += ui_text(f" · требуют проверки {unknown}", f" · {unknown} awaiting verification")
+        return {"pool_label": text, "reached": None if ready else "pool",
+                "pool_reset": now + 1 if ready else max(now + 1, min(next_checks))}
     if LIMITS_CACHE["data"] and time.time() - LIMITS_CACHE["at"] < max_age:
         return LIMITS_CACHE["data"]
     try:
@@ -1177,21 +1279,27 @@ async def get_limits(max_age=60):
         return await asyncio.to_thread(limits_cached)
 
 
-def win_name(mins):
+def win_name(mins, *, english=False):
     if mins >= 10080 and mins % 10080 == 0:
+        if english:
+            return "Week" if mins == 10080 else f"{mins // 10080} wk"
         return "неделя" if mins == 10080 else f"{mins // 10080} нед"
     if mins >= 1440 and mins % 1440 == 0:
-        return f"{mins // 1440} дн"
-    return f"{mins // 60} ч" if mins >= 60 else f"{mins} мин"
+        return f"{mins // 1440} {'d' if english else 'дн'}"
+    if mins >= 60:
+        return f"{mins // 60} {'h' if english else 'ч'}"
+    return f"{mins} {'min' if english else 'мин'}"
 
 
-def until(ts):
+def until(ts, *, english=False):
     s = max(0, int(ts - time.time()))
     d, h, m = s // 86400, s % 86400 // 3600, s % 3600 // 60
-    left = f"{d} д {h} ч" if d else f"{h} ч {m} мин" if h else f"{m} мин"
+    day_unit, hour_unit, minute_unit = ("d", "h", "min") if english else ("д", "ч", "мин")
+    left = (f"{d} {day_unit} {h} {hour_unit}" if d else
+            f"{h} {hour_unit} {m} {minute_unit}" if h else f"{m} {minute_unit}")
     when = dt.datetime.fromtimestamp(ts)
     day = "" if when.date() == dt.date.today() else when.strftime("%d.%m ")
-    return f"через {left} ({day}{when:%H:%M})"
+    return f"{'in' if english else 'через'} {left} ({day}{when:%H:%M})"
 
 
 def bar(pct, n=10):
@@ -1201,27 +1309,35 @@ def bar(pct, n=10):
 
 def fmt_limits(L):
     if not L:
-        return f"{E('err')} Не смог узнать лимиты Codex (нет ответа от app-server и нет логов сессий)."
-    lines = [f"{E('limits')} **Лимиты Codex**" + (f" · {L['plan']}" if L.get("plan") else "")]
+        message = ui_text("Не смог узнать лимиты Codex (нет ответа от app-server и нет логов сессий).",
+                          "Codex quota is unavailable (no app-server response or session logs).")
+        return f"{E('err')} {message}"
+    if "pool_label" in L:
+        return f"{E('limits')} **{L['pool_label']}**"
+    label = ui_text("Лимиты Codex", "Codex quota")
+    english = ui_text(False, True)
+    lines = [f"{E('limits')} **{label}**" + (f" · {L['plan']}" if L.get("plan") else "")]
     for key in ("primary", "secondary"):
         w = L.get(key)
         if not w:
             continue
         icon = "🟥" if w["used"] >= 90 else "🟨" if w["used"] >= 70 else "🟩"
-        lines.append(f"{icon} {win_name(w['mins'])}: {bar(w['used'])} **{w['used']:.0f}%**\n"
-                     f"     сброс {until(w['reset'])}")
+        lines.append(f"{icon} {win_name(w['mins'], english=english)}: {bar(w['used'])} **{w['used']:.0f}%**\n"
+                     f"     {ui_text('сброс', 'resets')} {until(w['reset'], english=english)}")
     c = L.get("credits") or {}
+    credits = ui_text("кредиты", "credits")
     if c.get("unlimited"):
-        lines.append(f"{E('credits')} кредиты: безлимит")
+        lines.append(f"{E('credits')} {credits}: {ui_text('безлимит', 'unlimited')}")
     elif c.get("has_credits") or c.get("hasCredits"):
-        lines.append(f"{E('credits')} кредиты: {float(c.get('balance') or 0):.0f}")
+        lines.append(f"{E('credits')} {credits}: {float(c.get('balance') or 0):.0f}")
     if L.get("resets_avail"):
-        lines.append(f"{E('gift')} бесплатных сбросов лимита: {L['resets_avail']}")
+        lines.append(f"{E('gift')} {ui_text('бесплатных сбросов лимита', 'free quota resets')}: {L['resets_avail']}")
     if L.get("reached"):
-        lines.append(f"{E('stop')} лимит исчерпан ({L['reached']})")
+        lines.append(f"{E('stop')} {ui_text('лимит исчерпан', 'quota exhausted')} ({L['reached']})")
     if not L.get("live"):
         ago = int(time.time() - L["at"]) // 60
-        lines.append(f"*(по последнему запуску, {ago} мин назад)*")
+        lines.append(ui_text(f"*(по последнему запуску, {ago} мин назад)*",
+                             f"*(last session, {ago} min ago)*"))
     return "\n".join(lines)
 
 
@@ -1240,13 +1356,17 @@ async def limits_note(engine=None, antigravity_model=None):
         return ""
     if not L or not any(w and w["used"] >= 70 for w in (L.get("primary"), L.get("secondary"))):
         return ""
-    return f"\n\n*{E('limits')} лимит Codex: {limits_short(L)}*"
+    return f"\n\n*{E('limits')} {ui_text('лимит Codex', 'Codex quota')}: {limits_short(L)}*"
 
 
 def limits_short(L):
     if not L:
         return ""
-    parts = [f"{win_name(w['mins'])} {w['used']:.0f}%" for w in (L.get("primary"), L.get("secondary")) if w]
+    if "pool_label" in L:
+        return L["pool_label"]
+    english = ui_text(False, True)
+    parts = [f"{win_name(w['mins'], english=english)} {w['used']:.0f}%"
+             for w in (L.get("primary"), L.get("secondary")) if w]
     return " · ".join(parts)
 
 
@@ -1325,7 +1445,7 @@ async def pause_for_limit(item, partial=""):
     L = await get_limits(0)
     L = L or {}
     resets = [w["reset"] for w in (L.get("primary"), L.get("secondary")) if w and w["used"] >= 99]
-    reset = max(resets) if resets else time.time() + 3600
+    reset = L.get("pool_reset") or (max(resets) if resets else time.time() + 3600)
     item.update(at=time.time(), reset=reset)
     q = STATE.setdefault("paused", [])
     q.append(item)
@@ -1333,10 +1453,23 @@ async def pause_for_limit(item, partial=""):
     STATE["fallback_until"] = max(STATE.get("fallback_until", 0), reset)
     save_state()
     if not item["background"] or item.get("incident"):
-        await notify(f"{E('stop')} **Лимит Codex кончился посреди задачи.** Продолжу её сам после сброса "
-                     f"({until(reset)}). Пока новые задачи делаю на быстрой модели Mercury ⚡."
-                     + (f"\n\n*Успел:* {partial[-800:]}" if partial else ""),
-                     markup=kb((btn("Лимиты", "limits!", "limits"), btn("Меню", "menu", "home"))), kind="limit")
+        eta = until(reset, english=ui_text(False, True))
+        if "pool_reset" in L:
+            message = ui_text(f"**Codex отклонил задачу из-за лимита.** Проверю пул {eta} "
+                              "и продолжу, как только подтвержу доступную квоту.",
+                              f"**Codex hit a usage limit.** I'll check the pool {eta} "
+                              "and resume as soon as I can confirm available quota.")
+        else:
+            message = ui_text(f"**Лимит Codex кончился посреди задачи.** Продолжу её сам после сброса ({eta}).",
+                              f"**Codex hit a usage limit mid-task.** I'll resume after the reset ({eta}).")
+        if fallback_active():
+            message += ui_text(" Пока новые задачи делаю на быстрой модели Mercury ⚡.",
+                               " New tasks run on Mercury for now ⚡.")
+        if partial:
+            message += f"\n\n*{ui_text('Успел', 'Progress so far')}:* {partial[-800:]}"
+        await notify(f"{E('stop')} {message}",
+                     markup=kb((btn(ui_text("Лимиты", "Limits"), "limits!", "limits"),
+                                btn(ui_text("Меню", "Menu"), "menu", "home"))), kind="limit")
 
 
 async def resume_loop():
@@ -1355,11 +1488,13 @@ async def resume_loop():
                     items, STATE["paused"] = list(q), []
                     save_state()
                     if was_fb:
-                        digest("Лимит Codex сбросился — вернулся на основную модель"
-                               + (f", доделал прерванных задач: {len(items)}" if items else ""))
+                        message = ui_text("Квота Codex доступна", "Codex quota is available")
+                        if items:
+                            message += ui_text(f" · к продолжению: {len(items)}", f" · {len(items)} to resume")
+                        digest(message)
                     for it in items:
                         lane = user_lane if it["lane"] == "user" else bg_lane
-                        prompt = ("[АВТОПРОДОЛЖЕНИЕ] Лимит Codex сбросился. Продолжи прерванную задачу с того места, "
+                        prompt = ("[АВТОПРОДОЛЖЕНИЕ] Квота Codex снова доступна. Продолжи прерванную задачу с того места, "
                                   "где остановился (проверь, что уже сделано). Если всё готово — коротко отчитайся."
                                   if it.get("thread") else it["prompt"])
                         asyncio.create_task(run_task(lane, prompt, thread_id=it.get("thread"), title=it["title"],
@@ -1368,11 +1503,13 @@ async def resume_loop():
                                                      images=[i for i in it.get("images", []) if os.path.exists(i)],
                                                      incident=it.get("incident"), show_progress=not it["background"],
                                                      resumed=True))
-                else:  # ещё не сбросился — проверим через 10 минут
+                else:
+                    now = time.time()
+                    next_check = max(now + POOL_REFRESH, (L or {}).get("pool_reset", now + 600))
                     for it in q:
-                        it["reset"] = time.time() + 600
+                        it["reset"] = next_check
                     if fb:
-                        STATE["fallback_until"] = time.time() + 600
+                        STATE["fallback_until"] = next_check
                     save_state()
         except Exception:
             log.exception("resume loop failed")
@@ -1429,9 +1566,11 @@ async def run_task(lane: Lane, prompt, *, thread_id=None, images=(), title=E("bu
             STATE["main_thread"] = tid
             STATE["main_at"] = time.time()
             save_state()
-        if err and engine == "codex" and LIMIT_RE.search(err) and not run.cancelled and not report_success:
+        quota_error = POOL_QUOTA_ERROR if active_codex_pool() else LIMIT_RE
+        if err and engine == "codex" and quota_error.search(err) and not run.cancelled and not report_success:
             if run.effects_possible:
-                err += "\nКоманда могла уже изменить состояние. Проверь результат перед повтором."
+                err += ui_text("\nКоманда могла уже изменить состояние. Проверь результат перед повтором.",
+                               "\nThe task may already have changed state. Check the result before retrying.")
             else:
                 await pause_for_limit(dict(lane=lane.name, prompt=prompt, thread=tid or thread_id, title=title,
                                            background=background, header=header, task=task, reply_to=reply_to,
@@ -1485,7 +1624,11 @@ def plain_buttons():
     return ui_mode() == "classic"
 
 
-from ui_settings import option as ui_option, filter_keyboard, settings_view, apply_action
+from ui_settings import option as ui_option, filter_keyboard, settings_view, apply_action, translate
+
+
+def ui_text(russian, english):
+    return translate(STATE, russian, english)
 
 
 def custom_keyboard(markup, scope):
@@ -1529,7 +1672,8 @@ def kb(*rows):
 
 
 def back(to="menu"):
-    return (btn("Назад", to, "back"), btn("Меню", "menu", "home")) if to != "menu" else (btn("Меню", "menu", "back"),)
+    menu = ui_text("Меню", "Menu")
+    return (btn(ui_text("Назад", "Back"), to, "back"), btn(menu, "menu", "home")) if to != "menu" else (btn(menu, "menu", "back"),)
 
 
 def stop_kb():
@@ -1613,11 +1757,14 @@ QUICK = {
 
 def busy_line():
     parts = []
-    for lane, who in ((user_lane, "твоя задача"), (bg_lane, "фоновая задача")):
+    for lane, who in ((user_lane, ui_text("твоя задача", "your task")),
+                      (bg_lane, ui_text("фоновая задача", "background task"))):
         if lane.current:
             el = int(time.time() - lane.current.started)
             parts.append(f"{who} {el // 60}:{el % 60:02d}")
-    return f"{E('busy')} работаю: " + ", ".join(parts) if parts else f"{E('ok')} свободен"
+    if parts:
+        return f"{E('busy')} " + ui_text("работаю: ", "Working: ") + ", ".join(parts)
+    return f"{E('ok')} " + ui_text("свободен", "Idle")
 
 
 def jobs_list():
@@ -1641,31 +1788,34 @@ async def model_quota_status():
 async def view_menu():
     du = shutil.disk_usage("/")
     _, short = await model_quota_status()
+    on_off = ui_text("вкл", "on") if STATE["watch"] else ui_text("выкл", "off")
     text = (f"{E('home')} **Nook**\n\n{busy_line()}\n"
-            f"{E('disk')} диск {du.used / du.total * 100:.0f}%  ·  "
-            f"{E('eye' if STATE['watch'] else 'eyeoff')} надзор {'вкл' if STATE['watch'] else 'выкл'}"
+            f"{E('disk')} {ui_text('диск', 'Disk')} {du.used / du.total * 100:.0f}%  ·  "
+            f"{E('eye' if STATE['watch'] else 'eyeoff')} {ui_text('надзор', 'Monitoring')} {on_off}"
             + f"\n{E('robot')} {model_label()}" + (f"  ·  {short}" if short else "")
-            + (f"\n{E('warn')} **полный root до {dt.datetime.fromtimestamp(full_until()):%H:%M}**"
+            + (f"\n{E('warn')} **{ui_text('полный root до', 'Full root access until')} {dt.datetime.fromtimestamp(full_until()):%H:%M}**"
                if full_until() else "")
-            + "\n\n*Просто напиши, что сделать, — или выбери ниже.*")
+            + ui_text("\n\n*Просто напиши, что сделать, — или выбери ниже.*",
+                      "\n\n*Tell me what to do or choose an action below.*"))
     busy = user_lane.current or bg_lane.current
     n = len(jobs_list())
     return text, custom_keyboard(kb(
-        (btn("Статус", "status", "status"), btn("Графики", "graph", "load"), btn("Лимиты", "limits", "limits")),
-        (btn("Проверь всё", "q:check", "check", "success"), btn("Уборка", "q:clean", "clean", "success")),
-        (btn(f"Задачи{f' · {n}' if n else ''}", "jobs", "jobs"),
-         btn(f"Ноды{f' · {len(nodes())}' if nodes() else ''}", "nodes", "node"), btn("Ещё", "more", "more")),
-        (btn(f"Избранное · {len(favs())}", "favs", "spark"),) if favs() else None,
-        (btn(f"Сводка · {len(STATE.get('digest', []))}", "digest", "info"),) if STATE.get("digest") else None,
-        (btn("Настройки", "settings", "more"),),
+        (btn(ui_text("Статус", "Status"), "status", "status"), btn(ui_text("Графики", "Charts"), "graph", "load"), btn(ui_text("Лимиты", "Usage"), "limits", "limits")),
+        (btn(ui_text("Проверь всё", "Run checks"), "q:check", "check", "success"), btn(ui_text("Уборка", "Clean up"), "q:clean", "clean", "success")),
+        (btn(f"{ui_text('Задачи', 'Tasks')}{f' · {n}' if n else ''}", "jobs", "jobs"),
+         btn(f"{ui_text('Ноды', 'Nodes')}{f' · {len(nodes())}' if nodes() else ''}", "nodes", "node"), btn(ui_text("Ещё", "More"), "more", "more")),
+        (btn(f"{ui_text('Избранное', 'Favorites')} · {len(favs())}", "favs", "spark"),) if favs() else None,
+        (btn(f"{ui_text('Сводка', 'Digest')} · {len(STATE.get('digest', []))}", "digest", "info"),) if STATE.get("digest") else None,
+        (btn(ui_text("Настройки", "Settings"), "settings", "more"),),
         *mod_rows("menu"),
-        (btn("Остановить", "stop", "stop", "danger"),) if busy else None,
-        (btn("Закрыть", "close", "cross"),),
+        (btn(ui_text("Остановить", "Stop"), "stop", "stop", "danger"),) if busy else None,
+        (btn(ui_text("Закрыть", "Close"), "close", "cross"),),
     ), "menu")
 
 
 async def view_status():
-    return f"{E('status')} **Статус сервера**\n\n" + await quick_status(), kb((btn("Обновить", "status!", "refresh"),) + back())
+    title = ui_text("Статус сервера", "Server status")
+    return f"{E('status')} **{title}**\n\n" + await quick_status(), kb((btn(ui_text("Обновить", "Refresh"), "status!", "refresh"),) + back())
 
 
 async def view_limits():
@@ -1676,19 +1826,32 @@ async def view_limits():
     model, _ = current_model()
     parts = (agy_text, codex_text) if is_antigravity_model(model) else (codex_text, agy_text)
     text = "\n\n".join(parts)
-    return text, kb((btn("Обновить", "limits!", "refresh"),) + back())
+    rows = [(btn(ui_text("Обновить", "Refresh"), "limits!", "refresh"),)]
+    if "codex_pool" in REG.mods:
+        rows.append((btn(ui_text("Пул Codex", "Codex pool"), "mod:codex_pool:open", "chatgpt"),))
+    return text, kb(*rows, back())
+
+
+def job_repeat(job):
+    if not job.get("every"):
+        return ""
+    interval = win_name(job["every"] // 60, english=ui_text(False, True))
+    return f" · {E('repeat')} {ui_text('каждые', 'every')} {interval}"
 
 
 async def view_jobs():
     jobs = jobs_list()
+    title = f"{E('jobs')} **{ui_text('Отложенные задачи', 'Scheduled tasks')}**"
     if not jobs:
-        return (f"{E('jobs')} **Отложенные задачи**\n\nПока пусто. Попроси, например: "
-                "«каждые 6 часов смотри, не растёт ли диск» или «завтра в 10 напомни про бэкап»."), kb(back())
-    lines, rows = [f"{E('jobs')} **Отложенные задачи**"], []
+        return title + "\n\n" + ui_text(
+            "Пока пусто. Попроси, например: «каждые 6 часов смотри, не растёт ли диск» "
+            "или «завтра в 10 напомни про бэкап».",
+            "No tasks yet. Ask me to check disk usage every six hours or remind you to back up tomorrow at 10.",
+        ), kb(back())
+    lines, rows = [title], []
     for j in jobs:
         when = dt.datetime.fromtimestamp(j["at"]).strftime("%d.%m %H:%M")
-        ev = f" · {E('repeat')} каждые {win_name(j['every'] // 60)}" if j.get("every") else ""
-        lines.append(f"\n**{when}**{ev}\n{j['prompt'][:200]}")
+        lines.append(f"\n**{when}**{job_repeat(j)}\n{j['prompt'][:200]}")
         rows.append((btn(f"{when} · {j['prompt'][:25]}", f"jc:{j['id']}", "cross"),))
     return "\n".join(lines), kb(*rows, back())
 
@@ -1721,7 +1884,7 @@ def current_model():
 def model_label():
     model, effort = current_model()
     if fallback_active() and model != MERCURY_MODEL:
-        return "Mercury 3 ⚡ (лимит)"
+        return ui_text("Mercury 3 ⚡ (лимит)", "Mercury 3 ⚡ (quota fallback)")
     return f"{MODELS.get(model, (model,))[0]} · {effort}"
 
 
@@ -1733,13 +1896,22 @@ def save_config():
 async def view_model():
     model, effort = current_model()
     efforts = MODELS.get(model, ("", ["low", "medium", "high"], ""))[1]
-    text = (f"{E('robot')} **Модель**\n\n"
-            f"Сейчас: **{MODELS.get(model, (model,))[0]}** (`{model}`), effort **{effort}**"
-            + (f"\n{E('warn')} лимит Codex кончился — до {dt.datetime.fromtimestamp(STATE['fallback_until']):%H:%M} "
-               "работаю на Mercury 3 ⚡" if fallback_active() else "") +
-            "\n\n*Effort — сколько модель думает перед ответом: выше — умнее, но дольше и быстрее съедает лимит.*\n"
-            "*Mercury 3 ⚡ — очень быстрая модель Inception, не тратит лимит Codex; попроще в сложных задачах. "
-            "Она же — запасная, когда лимит Codex кончается.*")
+    title = ui_text("Модель", "Model")
+    current = ui_text("Сейчас", "Current")
+    text = (f"{E('robot')} **{title}**\n\n"
+            f"{current}: **{MODELS.get(model, (model,))[0]}** (`{model}`), effort **{effort}**")
+    if fallback_active():
+        cutoff = dt.datetime.fromtimestamp(STATE["fallback_until"]).strftime("%H:%M")
+        text += f"\n{E('warn')} " + ui_text(
+            "Лимит Codex кончился. Работаю на Mercury 3 ⚡ до {}.",
+            "Codex quota is exhausted. Using Mercury 3 ⚡ until {}.",
+        ).format(cutoff)
+    text += "\n\n" + ui_text(
+        "*Effort — сколько модель думает перед ответом: выше — умнее, но дольше и быстрее съедает лимит.*\n"
+        "*Mercury 3 ⚡ — быстрая модель Inception. Она не тратит лимит Codex и служит запасной.*",
+        "*Higher effort makes the model reason longer and use more quota.*\n"
+        "*Mercury 3 ⚡ is a fast Inception model that serves as a fallback without using Codex quota.*",
+    )
     groups = {"Codex": [], "Antigravity": [], "Mercury": []}
     for model_id, (name, _, _) in MODELS.items():
         provider = "Codex"
@@ -2070,36 +2242,53 @@ async def view_root():
 
 async def view_more():
     w = STATE["watch"]
-    return (f"{E('more')} **Ещё**\n\n"
-            f"{E('eye')} **Автонадзор** — каждые {win_name(WATCH_INTERVAL // 60)} смотрю за сервисами, сам чиню упавшее и пишу тебе; "
-            f"в {CFG.get('patrol_time', '12:00')} — ежедневный обход.\n\n"
-            f"{E('new')} **Новый разговор** — забыть контекст переписки (заметки о сервере остаются)."
-            + (f" Сейчас в разговоре ~{ctx // 1000}k токенов, сжимаю на {CFG.get('compact_tokens', COMPACT_TOKENS) // 1000}k; "
-               f"после {CFG.get('idle_reset_hours', IDLE_RESET_H)} ч тишины начинаю заново сам." if (ctx := context_tokens()) else "")
-            + "\n\n"
-            f"{E('login')} **Войти в Codex** — если слетела авторизация."), kb(
-        (btn("Настройки интерфейса", "settings", "more"),),
-        (btn(f"Модель: {model_label()}", "model", "robot", "primary"),),
-        (btn(f"Навыки и сервисы · {len(list_skills()) + len(list_mcp())}", "skills", "spark"),),
-        (btn(f"Охрана нод: {'вкл' if STATE.get('guard', True) else 'выкл'}", "guard", "shield"),),
-        (btn(f"Моды · {len(REG.mods)}", "mods", "plus"), btn("Что я делал", "journal", "jobs")),
-        (btn("Бэкапы", "backups", "disk"), btn("Обновления", "updcheck", "refresh")),
-        (btn("Оплата серверов", "pay", "cal"), btn(f"Деплой{f' · {len(deploys())}' if deploys() else ''}", "deploy", "repeat")),
-        (btn(f"Гости{f' · {len(guests())}' if guests() else ''}", "guests", "eye"),
-         btn("Уведомления: " + ("тихо" if quiet() else "всё"), "nmode", "bell")),
-        (btn("Root: " + (f"полный до {dt.datetime.fromtimestamp(full_until()):%H:%M}" if full_until()
-                         else "по кнопке"), "root", "login", "danger" if full_until() else None),),
-        (btn(f"Надзор: {'включён' if w else 'выключен'}", "watch",
+    interval = WATCH_INTERVAL // 60
+    patrol_time = CFG.get('patrol_time', '12:00')
+    watch_text = ui_text(
+        f"**Автонадзор** — каждые {win_name(interval)} смотрю за сервисами, сам чиню упавшее и пишу тебе; "
+        f"в {patrol_time} — ежедневный обход.",
+        f"**Monitoring** checks services every {interval} minutes, attempts recovery, and notifies you. "
+        f"Daily check at {patrol_time}.",
+    )
+    new_text = ui_text(
+        "**Новый разговор** — забыть контекст переписки (заметки о сервере остаются).",
+        "**New conversation** starts a fresh chat context and keeps your server notes.",
+    )
+    if ctx := context_tokens():
+        compact = CFG.get('compact_tokens', COMPACT_TOKENS) // 1000
+        idle = CFG.get('idle_reset_hours', IDLE_RESET_H)
+        new_text += ui_text(
+            f" Сейчас в разговоре ~{ctx // 1000}k токенов, сжимаю на {compact}k; "
+            f"после {idle} ч тишины начинаю заново сам.",
+            f" This conversation uses ~{ctx // 1000}k tokens. Nook compacts at {compact}k "
+            f"and starts a fresh context after {idle} hours of inactivity.",
+        )
+    login_text = ui_text("**Войти в Codex** — если слетела авторизация.",
+                         "**Sign in to Codex** when your authorization expires.")
+    return (f"{E('more')} **{ui_text('Ещё', 'More')}**\n\n"
+            f"{E('eye')} {watch_text}\n\n{E('new')} {new_text}\n\n{E('login')} {login_text}"), kb(
+        (btn(ui_text("Настройки интерфейса", "Interface settings"), "settings", "more"),),
+        (btn(f"{ui_text('Модель:', 'Model:')} {model_label()}", "model", "robot", "primary"),),
+        (btn(f"{ui_text('Навыки и сервисы', 'Skills and services')} · {len(list_skills()) + len(list_mcp())}", "skills", "spark"),),
+        (btn(f"{ui_text('Охрана нод:', 'Node security:')} {ui_text('вкл', 'on') if STATE.get('guard', True) else ui_text('выкл', 'off')}", "guard", "shield"),),
+        (btn(f"{ui_text('Моды', 'Mods')} · {len(REG.mods)}", "mods", "plus"), btn(ui_text("Что я делал", "Activity log"), "journal", "jobs")),
+        (btn(ui_text("Бэкапы", "Backups"), "backups", "disk"), btn(ui_text("Обновления", "Software updates"), "updcheck", "refresh")),
+        (btn(ui_text("Оплата серверов", "Server bills"), "pay", "cal"), btn(f"{ui_text('Деплой', 'Deployments')}{f' · {len(deploys())}' if deploys() else ''}", "deploy", "repeat")),
+        (btn(f"{ui_text('Гости', 'Guests')}{f' · {len(guests())}' if guests() else ''}", "guests", "eye"),
+         btn(ui_text("Уведомления:", "Notifications:") + " " + (ui_text("тихо", "quiet") if quiet() else ui_text("всё", "all")), "nmode", "bell")),
+        (btn("Root: " + (f"{ui_text('полный до', 'full until')} {dt.datetime.fromtimestamp(full_until()):%H:%M}" if full_until()
+                         else ui_text("по кнопке", "by approval")), "root", "login", "danger" if full_until() else None),),
+        (btn(f"{ui_text('Надзор:', 'Monitoring:')} {ui_text('включён', 'enabled') if w else ui_text('выключен', 'disabled')}", "watch",
              "eye" if w else "eyeoff", "success" if w else "danger"),),
-        (btn(f"Не слежу · {len(STATE.get('muted', []))}", "muted", "eyeoff"),) if STATE.get("muted") else None,
-        (btn("Новый разговор", "new", "new"), btn("Войти в Codex", "login", "login")),
+        (btn(f"{ui_text('Не слежу', 'Muted topics')} · {len(STATE.get('muted', []))}", "muted", "eyeoff"),) if STATE.get("muted") else None,
+        (btn(ui_text("Новый разговор", "New conversation"), "new", "new"), btn(ui_text("Войти в Codex", "Sign in to Codex"), "login", "login")),
         *mod_rows("more"),
         *(mod_rows("menu") if not ui_option(STATE, "menu_mods") else []),
-        (btn("Статус", "status", "status"), btn("Графики", "graph", "load"), btn("Лимиты", "limits", "limits")),
-        (btn("Проверь всё", "q:check", "check"), btn("Уборка", "q:clean", "clean")),
-        (btn("Задачи", "jobs", "jobs"), btn("Ноды", "nodes", "node")),
-        (btn("Избранное", "favs", "spark"), btn("Сводка", "digest", "info")),
-        (btn("Очистить чат", "wipe", "clean"),),
+        (btn(ui_text("Статус", "Status"), "status", "status"), btn(ui_text("Графики", "Charts"), "graph", "load"), btn(ui_text("Лимиты", "Usage"), "limits", "limits")),
+        (btn(ui_text("Проверь всё", "Run checks"), "q:check", "check"), btn(ui_text("Уборка", "Clean up"), "q:clean", "clean")),
+        (btn(ui_text("Задачи", "Tasks"), "jobs", "jobs"), btn(ui_text("Ноды", "Nodes"), "nodes", "node")),
+        (btn(ui_text("Избранное", "Favorites"), "favs", "spark"), btn(ui_text("Сводка", "Digest"), "digest", "info")),
+        (btn(ui_text("Очистить чат", "Clear chat"), "wipe", "clean"),),
         back())
 
 
@@ -2257,19 +2446,19 @@ async def handle_button(cb: CallbackQuery):
         try:
             section = apply_action(STATE, data)
         except ValueError:
-            return await cb.answer("Эта настройка уже недоступна")
+            return await cb.answer(ui_text("Эта настройка уже недоступна", "This setting is unavailable"))
         save_state()
-        await cb.answer("Сохранено")
+        await cb.answer(ui_text("Сохранено", "Saved"))
         return await show(chat, "settings" if section == "home" else "settings_" + section, mid)
     if data.endswith("!") and data[:-1] in VIEWS:
         FORCE.set(True)
         await cb.answer()
-        async with waiting(chat, "обновляю"):
+        async with waiting(chat, ui_text("обновляю", "Refreshing")):
             return await show(chat, data[:-1], mid)
     if data in VIEWS:
         await cb.answer()
         if data in SLOW_VIEWS:
-            async with waiting(chat, "собираю данные"):
+            async with waiting(chat, ui_text("собираю данные", "Collecting data")):
                 return await show(chat, data, mid)
         return await show(chat, data, mid)
     if data == "watch":
@@ -2310,7 +2499,7 @@ async def handle_button(cb: CallbackQuery):
         if CFG.get("effort") not in MODELS[data[2:]][1]:
             CFG["effort"] = MODELS[data[2:]][2]
         save_config()
-        await cb.answer(f"Модель: {model_label()}")
+        await cb.answer(f"{ui_text('Модель', 'Model')}: {model_label()}")
         return await show(chat, "model", mid)
     if data.startswith("ef:"):
         CFG["effort"] = data[3:]
@@ -2378,18 +2567,21 @@ async def handle_button(cb: CallbackQuery):
     if data.startswith("jc:"):
         j = next((j for j in jobs_list() if j["id"] == data[3:]), None)
         if not j:
-            await cb.answer("Уже нет такой")
+            await cb.answer(ui_text("Уже нет такой", "Task no longer exists"))
             return await show(chat, "jobs", mid)
         await cb.answer()
         when = dt.datetime.fromtimestamp(j["at"]).strftime("%d.%m %H:%M")
-        if await edit(chat, mid, f"{E('warn')} **Отменить задачу?**\n\n**{when}**"
-                      + (f" · {E('repeat')} каждые {win_name(j['every'] // 60)}" if j.get("every") else "")
+        title = ui_text("Отменить задачу?", "Cancel this task?")
+        if await edit(chat, mid, f"{E('warn')} **{title}**\n\n**{when}**"
+                      + job_repeat(j)
                       + f"\n{j['prompt'][:500]}",
-                      kb((btn("Да, отменить", f"jcy:{j['id']}", "cross", "danger"), btn("Нет", "jobs", "back")))):
+                      kb((btn(ui_text("Да, отменить", "Cancel task"), f"jcy:{j['id']}", "cross", "danger"),
+                          btn(ui_text("Нет", "Keep task"), "jobs", "back")))):
             return
         return await show(chat, "jobs", mid)
     if data.startswith("jcy:"):
-        await cb.answer("Отменил" if cancel_job(data[4:]) else "Уже нет такой")
+        await cb.answer(ui_text("Отменил", "Task cancelled") if cancel_job(data[4:])
+                        else ui_text("Уже нет такой", "Task no longer exists"))
         return await show(chat, "jobs", mid)
     if data.startswith("q:") and data[2:] in QUICK:
         title, prompt = QUICK[data[2:]]
@@ -2825,13 +3017,22 @@ async def cmd_login(msg: Message):
 CODEX_LOGIN_LOCK = asyncio.Lock()
 
 
-async def do_login(chat):
+async def do_login(chat, *, after_login=None):
+    if core.codex_pool_runtime.busy:
+        return await send(chat, ui_text("Дождись завершения работы пула Codex и повтори вход.",
+                                        "Wait for the Codex pool to finish, then try signing in again."))
     if CODEX_LOGIN_LOCK.locked():
-        return await send(chat, "Вход в Codex уже открыт — заверши его по предыдущей ссылке.")
+        return await send(chat, ui_text("Вход в Codex уже открыт — заверши его по предыдущей ссылке.",
+                                            "Codex sign-in is already in progress. Use the previous link to finish."))
     async with CODEX_LOGIN_LOCK:
         # Вход в отдельном каталоге: неудача или отмена не трогает текущий аккаунт.
-        auth_home = os.path.expanduser("~/.codex")
-        os.makedirs(auth_home, mode=0o700, exist_ok=True)
+        auth_home = Path(os.path.expanduser("~/.codex"))
+        try:
+            auth_home.mkdir(mode=0o700, exist_ok=True)
+            owned_path(auth_home, directory=True, allow_user_group=True)
+        except OSError:
+            return await send(chat, ui_text("Каталог авторизации Codex небезопасен или недоступен.",
+                                            "The Codex credential directory is unsafe or inaccessible."))
         with tempfile.TemporaryDirectory(prefix=".nook-login-", dir=auth_home) as stage:
             env = codex_env()
             env["CODEX_HOME"] = stage
@@ -2845,8 +3046,12 @@ async def do_login(chat):
                     async for line in proc.stdout:
                         buf += re.sub(r"\x1b\[[0-9;]*m", "", line.decode(errors="replace"))
                         if not sent and re.search(r"https?://\S+", buf) and re.search(r"\b[A-Z0-9]{4,}-[A-Z0-9]{4,}\b", buf):
-                            sent = await send(chat, f"{E('login')} **Смена аккаунта Codex:**\n\n" + buf.strip()[-1500:]
-                                              + "\n\nОткрой ссылку и войди в нужный аккаунт. До завершения входа текущий аккаунт сохранён.")
+                            title = ui_text("Смена аккаунта Codex", "Switch Codex account")
+                            instructions = ui_text(
+                                "Открой ссылку и войди в нужный аккаунт. До завершения входа текущий аккаунт сохранён.",
+                                "Open the link and sign in to the desired account. Your current login remains active until then.",
+                            )
+                            sent = await send(chat, f"{E('login')} **{title}**\n\n{buf.strip()[-1500:]}\n\n{instructions}")
                 await asyncio.wait_for(reader(), 15 * 60)
                 await proc.wait()
             except asyncio.TimeoutError:
@@ -2857,26 +3062,38 @@ async def do_login(chat):
                     await proc.wait()
                 if sent:
                     trash(chat, sent, 5)
-            new_auth = os.path.join(stage, "auth.json")
-            if proc.returncode != 0 or not os.path.isfile(new_auth):
-                return await send(chat, "Не удалось войти в новый аккаунт Codex. Текущий вход сохранён.")
+            new_auth = Path(stage) / "auth.json"
+            if proc.returncode != 0 or not new_auth.exists():
+                return await send(chat, ui_text("Не удалось войти в новый аккаунт Codex. Текущий вход сохранён.",
+                                            "Could not sign in to the new Codex account. Your current login is still active."))
             try:
+                owned_path(new_auth)
                 auth = load_json(new_auth, {})
-                if not (auth.get("tokens") or auth.get("OPENAI_API_KEY")):
+                if not isinstance(auth, dict) or not (auth.get("tokens") or auth.get("OPENAI_API_KEY")):
                     raise ValueError("empty credentials")
-                target = os.path.join(auth_home, "auth.json")
-                if os.path.exists(target):
-                    backup = target + ".bak-" + dt.datetime.now().strftime("%Y%m%d-%H%M%S")
-                    shutil.copy2(target, backup)
-                    os.chmod(backup, 0o600)
-                os.chmod(new_auth, 0o600)
+                target = auth_home / "auth.json"
+                try:
+                    owned_path(target)
+                except FileNotFoundError:
+                    pass
+                else:
+                    backup = target.with_name(f"auth.json.bak-{time.time_ns()}")
+                    with os.fdopen(os.open(backup, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as previous:
+                        previous.write(target.read_bytes())
+                new_auth.chmod(0o600)
                 os.replace(new_auth, target)
             except (OSError, ValueError):
-                return await send(chat, "Не удалось сохранить новый вход Codex. Предыдущий аккаунт сохранён.")
-            STATE["main_thread"] = None
+                return await send(chat, ui_text("Не удалось сохранить новый вход Codex. Предыдущий аккаунт сохранён.",
+                                            "Could not save the new Codex login. Your previous login is still active."))
+            if not str(STATE.get("main_thread") or "").startswith(("merc-", "agy-")):
+                STATE["main_thread"] = None
             STATE["fallback_until"] = 0
+            LIMITS_CACHE.update(data=None, at=0.0)
             save_state()
-            await send_tmp(chat, "✅ Аккаунт Codex подключён. Следующий разговор начнётся заново. Лимиты можно посмотреть кнопкой «Лимиты».", 120)
+            if after_login is not None:
+                await after_login(target)
+            await send_tmp(chat, ui_text("✅ Аккаунт Codex подключён. Следующий разговор начнётся заново. Лимиты можно посмотреть кнопкой «Лимиты».",
+                                            "✅ Codex account connected. The next Codex conversation starts a new session. Open Usage to check your quotas."), 120)
 
 
 # ---------------------------------------------------------------- голосовые
@@ -4788,6 +5005,10 @@ core.llm = llm
 core.digest = lambda text, buttons=(): digest(text, buttons)
 core.bg_task = lambda prompt, title: run_task(bg_lane, prompt, background=True, show_progress=False, header=E("plus") + " ")
 core.codex_login = do_login
+core.codex_pool_runtime = CodexPool(Path.home() / ".codex", {}, read_codex_limits, CODEX_LOGIN_LOCK)
+core.codex_model = lambda: CFG.get("model")
+core.codex_window_name = win_name
+core.codex_pool_warmup = codex_pool_warmup
 core.bot, core.tg, core.state = bot, tg, STATE
 core.maintenance_lanes = (user_lane, bg_lane)
 REG = modsys.Registry(core)
@@ -4862,25 +5083,26 @@ async def mods_loop():
 async def view_mods():
     files = modsys.mod_files()
     dis = set(modsys.load_conf().get("disabled", []))
-    lines = [f"{E('plus')} **Моды**", "",
-             "Мои расширения: команды, кнопки, фоновые задачи. Попроси «сделай мод, который …» — напишу и подключу "
-             "на лету, без перезапуска.", ""]
+    lines = [f"{E('plus')} **{ui_text('Моды', 'Mods')}**", "",
+             ui_text("Мои расширения: команды, кнопки, фоновые задачи. Попроси «сделай мод, который …» — напишу и подключу "
+                     "на лету, без перезапуска.",
+                     "Mods add commands, buttons, and background jobs. Ask Nook to write and load a mod."), ""]
     rows = []
     for n in files:
         m = REG.mods.get(n)
         if n in dis:
-            lines.append(f"⚪ **{n}** — выключен")
+            lines.append(f"⚪ **{n}** — {ui_text('выключен', 'disabled')}")
         elif n in REG.failed:
-            lines.append(f"🔴 **{n}** — не загрузился: `{REG.failed[n].strip().splitlines()[-1][:120]}`")
+            lines.append(f"🔴 **{n}** — {ui_text('не загрузился', 'failed to load')}: `{REG.failed[n].strip().splitlines()[-1][:120]}`")
         elif m:
-            extra = [f"/{c}" for c in m.commands] + [f"[{t}]" for t, *_ in m.buttons]
+            extra = [f"/{c}" for c in m.commands] + [f"[{m.button_label(key, label)}]" for label, key, _, _ in m.buttons]
             lines.append(f"🟢 **{n}** — {m.title}" + (f"\n    {' '.join(extra)}" if extra else ""))
-        rows.append((btn(("Включить " if n in dis else "Выключить ") + n, f"mt:{n}",
+        rows.append((btn((ui_text("Включить ", "Enable ") if n in dis else ui_text("Выключить ", "Disable ")) + n, f"mt:{n}",
                          "ok" if n in dis else "eyeoff"),))
     if not files:
-        lines.append("*Пока ни одного.*")
+        lines.append(ui_text("*Пока ни одного.*", "*No mods installed.*"))
     return "\n".join(lines), kb(*mod_rows("mods"), *rows,
-                                (btn("Перечитать моды", "mreload", "refresh"), btn("Перезапуск ядра", "mrestart", "repeat")),
+                                (btn(ui_text("Перечитать моды", "Reload mods"), "mreload", "refresh"), btn(ui_text("Перезапуск ядра", "Restart core"), "mrestart", "repeat")),
                                 back("more"))
 
 
@@ -4890,7 +5112,7 @@ VIEWS["mods"] = view_mods
 async def check_limits():
     """Предупредить хозяина один раз за окно, когда лимит Codex перевалил за 90%."""
     L = await get_limits(0)
-    if not L:
+    if not L or "pool_label" in L:
         return
     # если живые данные говорят, что лимит уже сброшен, а откат ещё активирован (по старому состояу) — снять его
     if not L.get("reached") and not any(w and w["used"] >= 97 for w in (L.get("primary"), L.get("secondary"))):
@@ -4932,13 +5154,17 @@ async def quick_status():
     du = shutil.disk_usage("/")
     mi = meminfo()
     l1, l5, _ = os.getloadavg()
-    up = time.time() - float(open("/proc/uptime").read().split()[0])
+    uptime = float(Path("/proc/uptime").read_text().split()[0]) / 86400
+    space = ui_text("диск", "Disk")
+    free = ui_text("свободно", "free")
+    available = ui_text("доступно", "available")
+    gib = ui_text("ГБ", "GiB")
     lines = [
-        f"{E('disk')} диск: {du.used / du.total * 100:.0f}% (свободно {du.free / 2**30:.1f} ГБ)",
-        f"{E('ram')} RAM: доступно {mi['MemAvailable'] / 2**30:.1f} из {mi['MemTotal'] / 2**30:.1f} ГБ, "
-        f"swap {(mi['SwapTotal'] - mi['SwapFree']) / 2**30:.1f} ГБ",
+        f"{E('disk')} {space}: {du.used / du.total * 100:.0f}% ({free} {du.free / 2**30:.1f} {gib})",
+        f"{E('ram')} RAM: {available} {mi['MemAvailable'] / 2**30:.1f} {ui_text('из', 'of')} "
+        f"{mi['MemTotal'] / 2**30:.1f} {gib}, swap {(mi['SwapTotal'] - mi['SwapFree']) / 2**30:.1f} {gib}",
         f"{E('load')} load: {l1:.2f} / {l5:.2f} ({os.cpu_count()} CPU)",
-        f"{E('uptime')} аптайм: {(time.time() - up) / 86400:.1f} дн",
+        f"{E('uptime')} {ui_text('аптайм', 'Uptime')}: {uptime:.1f} {ui_text('дн', 'd')}",
     ]
     try:
         if not FORCE.get() and SNAPSHOT["data"] and time.time() - SNAPSHOT["at"] < WATCH_INTERVAL + 60:
@@ -4950,20 +5176,22 @@ async def quick_status():
         lines += [f"{E('warn')} {a}" for a in alerts.values()]
         lines.append("")
         if down:
-            lines.append(f"{E('down')} **упало (раньше работало): {len(down)}**")
+            label = ui_text("упало (раньше работало)", "Previously healthy services down")
+            lines.append(f"{E('down')} **{label}: {len(down)}**")
             lines += [f"- {d}" for d in down[:10]] + [""]
         else:
-            lines.append(f"{E('ok')} всё, что работало, работает")
+            lines.append(f"{E('ok')} " + ui_text("всё, что работало, работает", "Previously healthy services are running"))
     except Exception as e:
-        lines.append(f"(мониторинг: {e})")
+        lines.append(f"({ui_text('мониторинг', 'Monitoring')}: {e})")
     try:
         provider, short = await model_quota_status()
         if short:
             lines.append(f"{E('robot')} {provider}: {short}")
     except Exception:
         pass
-    lines.append(f"{E('eye' if STATE['watch'] else 'eyeoff')} автонадзор: {'вкл' if STATE['watch'] else 'выкл'}"
-                 f"{' · занят' if user_lane.current or bg_lane.current else ''}")
+    watch = ui_text("вкл", "on") if STATE["watch"] else ui_text("выкл", "off")
+    busy = ui_text(" · занят", " · busy") if user_lane.current or bg_lane.current else ""
+    lines.append(f"{E('eye' if STATE['watch'] else 'eyeoff')} {ui_text('автонадзор', 'Monitoring')}: {watch}{busy}")
     return "\n".join(lines)
 
 
@@ -5223,19 +5451,19 @@ async def main():
 
 async def run_main():
     from legacy_migration import startup_held
-    from nook_update import heartbeat
+    from nook_update import environment_held, heartbeat
 
     home = Path(HOME)
     for d in (OUTBOX, INBOX):
         os.makedirs(d, exist_ok=True)
     os.makedirs(modsys.SPOOL, exist_ok=True)
-    held = startup_held(home)
+    held = startup_held(home) or environment_held(home)
     await mods_reload(start_tasks=not held)
     me = await bot.get_me()
     if held:
         # Let the external supervisor verify the candidate before polling
         # Telegram or allowing background tasks to claim real work.
-        while startup_held(home):
+        while startup_held(home) or environment_held(home):
             heartbeat(home, REG.failed)
             await asyncio.sleep(2)
         REG.start_tasks()

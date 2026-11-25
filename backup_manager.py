@@ -10,6 +10,7 @@ import hashlib
 import io
 import json
 import os
+import re
 from pathlib import Path, PurePosixPath
 import shutil
 import sqlite3
@@ -171,6 +172,14 @@ def _files(home, limits, include_providers):
         path = provider_path(name)
         if path.exists():
             add_file(path, PurePosixPath('provider-home') / name)
+
+    saved = provider_path('.codex/accounts')
+    if saved.exists():
+        if not saved.is_dir():
+            raise BackupError('Каталог аккаунтов Codex не является обычной папкой.')
+        for path in sorted(saved.iterdir()):
+            if path.name == 'registry.json' or re.fullmatch(r'[A-Za-z0-9_-]{1,240}\.auth\.json', path.name):
+                add_file(path, PurePosixPath('provider-home/.codex/accounts') / path.name)
 
     sessions = provider_path('.codex/sessions')
     if sessions.exists():

@@ -1,6 +1,11 @@
 # Changelog
 
-## Unreleased
+## 0.1.2-nightly.20261125
+
+- Add an opt-in Codex account pool with four routing orders, per-account quota budgets, safe conversation continuation, reset notifications, and optional weekly warm-up.
+- Let the original v0.1.1 Telegram updater adopt compatible code while keeping the chosen update behavior. The original v0.1.0 needs its first signed upgrade over SSH.
+- For managed installations, stage new Python dependencies for signed upgrades, verify a complete local snapshot, and restore the prior source and environment if startup fails.
+- Add an English preference for the Telegram menus, release updates and Codex pool.
 
 - Group models by provider in Telegram. Add Antigravity Carbon and Hydrogen when available in the provider account.
 - Show the active provider's quota in the menu and status. The optional Codex account switcher can display quota for saved accounts with a compatible codex-auth CLI.

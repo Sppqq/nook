@@ -1,5 +1,148 @@
 # Modernization log
 
+## Iteration 22 — verify the release archive and document the upgrade path
+
+- Require disposable systemd migration and rollback checks before the
+  Verified release workflow hands off an archive for review or attestation.
+- Document the Telegram paths for current and v0.1.1 installs and the signed
+  SSH bridge for v0.1.0 in both languages.
+
+## Iteration 21 — close the Codex CLI startup cancellation race
+
+- Keep the process handle when cancellation arrives during startup. Stop
+  the CLI and its descendants before account recovery proceeds.
+- Exercise the race by cancelling while a real child is already running
+  and the wrapper's process handle has not reached the caller.
+
+## Iteration 20 — localize more of the owner workflow
+
+- Translate server status, model choice and fallback, the task list and
+  cancellation confirmation. The Telegram dispatcher test exercises both
+  confirmation and repeated cancellation with the production queue.
+- Record the live promotion checklist for historical migration, sandbox
+  rollback and multi-account quota recovery.
+
+## Iteration 19 — make manual account changes recoverable
+
+- Account imports run under the core login lock after successful device
+  authorization. A failed sign-in keeps the previous account and quota
+  cache. Other providers keep their current conversation.
+- A failed or cancelled account switch restores the previous credential and
+  registry contents. The CLI wrapper and its subprocesses stop before the
+  restoration. Legacy Codex homes with a local user-private group remain
+  usable with their existing directory mode.
+
+## Iteration 18 — exercise the oldest installation and the owner handoff
+
+- Run the original v0.1.0 bot and its declared dependencies before the
+  migration in a disposable Linux user service. Exercise the deployed
+  candidate's Telegram dispatcher, preview and confirmation of the official
+  channel. The fixture uses local release input and a fake Telegram transport.
+- Cover owner approval and rollback for a data-only legacy function in the
+  actual Bubblewrap runner, using fixture inputs and a simulated approval.
+- Translate manual Codex operations, device-login notices and local extension
+  controls. Exercise a successful and a rejected device login with test
+  credentials, including session state and private backup permissions.
+- Run 206 local tests with one optional `age` test skipped. Measured line
+  coverage is 29.4% for `bot.py` and 87.8% for `codex_pool.py`.
+
+## Iteration 17 — protect pooled credentials and recovery
+
+- Reserve a Codex account while reading its quota so a probe and a turn
+  cannot use the same saved login concurrently. Manual login, account switch
+  and account-list quota refresh wait for pool activity to finish.
+- Reject hard-linked credential files and registry paths writable by other
+  users. Preserve the existing Codex root and alternate-home layout.
+- Keep the requested session when the CLI reports a different thread.
+  Suppress automatic replay after partial output, malformed stream events,
+  completed turns or possible tool effects. Cover these cases through the
+  real CLI subprocess and Telegram task dispatch with fixture data.
+
+## Iteration 16 — localize Codex quota and recovery notices
+
+- Use the owner's saved language for the Codex quota panel, low-quota footer,
+  pool availability, and pause and resume notices. The Telegram dispatch test
+  exercises an unavailable pool account, optional Mercury fallback, and
+  the original thread's recovery after a quota check.
+
+## Iteration 15 — verify the exact v0.1.1 update path
+
+- Exercise the historical menu check and confirmation, pinned main archive,
+  and worker on Linux user systemd. Reuse the v0.1.1 installation's own
+  environment across cutover. The fixture installs its declared base
+  dependencies and simulates only the remote download and Telegram traffic.
+
+## Iteration 14 — localize the Telegram update path
+
+- Add an owner-only language switch that preserves existing preferences and
+  defaults to Russian for old installations. Translate the main menu, interface
+  settings, update screens, scheduled release notifications, and the
+  Codex pool's account controls and reset notifications.
+- Test persistence, private owner authorization, and the unchanged separate
+  downgrade confirmation. Installer, core diagnostics, and mod coverage remain
+  incomplete.
+
+## Iteration 13 — prepare the next Nightly candidate
+
+- Exercise the real bot entry point with a pending environment update. It
+  records candidate health after Telegram responds and waits for supervisor
+  approval before polling or scheduling work. A Telegram startup failure
+  leaves the candidate unapproved and starts no work.
+- Assign a distinct Nightly version and render release notes that describe
+  signed dependency upgrades. The installer test now runs on the candidate's
+  own channel. The published Alpha remains available.
+- Give successful cold starts time to report health in the disposable
+  systemd exercise. A busy runner exceeded the earlier test-only deadline
+  and the fixture reverted to its old service as intended.
+
+## Iteration 12 — switch dependencies in a signed update
+
+- Prepare and validate a separate Python environment before stopping the
+  service. Verify a full stopped-installation snapshot before exchanging it.
+- Use the frozen updater to restore the original environment and source.
+  Keep the current systemd unit, channel choice, and local runtime files.
+- Scan the resolved base and voice Python dependencies with `pip-audit`.
+
+## Iteration 11 — verify queued Codex recovery
+
+- Exercised the background resume loop with one distant reset and one
+  recovered account. It clears the persisted fallback state and resumes
+  the same thread. The digest reports that work can continue.
+- Codex-only installations keep their configured engine while tasks are
+  paused. Automatic Mercury routing requires a configured Mercury key.
+
+## Iteration 10 — Alpha onboarding and contribution guides
+
+- Updated both READMEs and release operations to use the published Alpha.
+- Added issue and PR templates with concrete verification and compatibility
+  fields. Documented staged migration of a trusted mod's pure logic while
+  retaining its existing data, permissions, and rollback path.
+- Checked the CLI-generated quota protocol schema against the pool reader
+  without reading credentials or making provider calls.
+
+## Iteration 9 — pool recovery and migration interlock
+
+- Corrected Codex pool retry timing and error classification with aiogram
+  integration coverage. An available account triggers a prompt retry.
+- A queued code update now blocks a simultaneous full migration even if
+  the previous update journal already reports success.
+- Downloaded and verified the existing public Alpha ZIP and its GitHub
+  provenance with the production release client at source commit beef3a4.
+
+## Iteration 8 — existing Telegram updater
+
+- Reused the frozen v0.1.1 worker for first adoption from main. The startup
+  guard joins the original health check or restores an interrupted update.
+- Verified the exact tag and new artifact with a disposable user systemd
+  service. Fixed installer checks in linked Git worktrees.
+
+## Iteration 7 — Codex account pool
+
+- Started from main after #7 and #8 merged. Ported opt-in quota routing,
+  budgets, reset notices and optional warm-up from the private deployment.
+- Included saved logins in opt-in provider backups and checked that a quota
+  rejection resumes the same thread with no global credential switch.
+
 ## 2026-11-24 — Iteration 5
 
 - Added staged Python mods/tools and text skills, with content-addressed

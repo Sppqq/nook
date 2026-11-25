@@ -29,6 +29,7 @@ REPO = 'Sppqq/nook'
 STATE = '.nook-install.json'
 UPDATE_SETTINGS = 'spool/updates/settings.json'
 AUTO_MODES = {'off', 'notify', 'confirm', 'install'}
+REQUIREMENTS = ('requirements.txt', 'requirements-voice.txt')
 TOP = {'MANIFEST.json', 'VERSION', 'README.md', 'CHANGELOG.md', 'CONTRIBUTING.md', 'LICENSE',
        'SECURITY.md', '.gitignore', 'config.example.json', 'secrets.env.example',
        'requirements.txt', 'requirements-voice.txt', 'bootstrap.sh', 'install.sh'}
@@ -474,16 +475,21 @@ def verify_source(source):
     return manifest
 
 
-def plan_source(home, source, revision, stage, *, allow_removals=False):
+def plan_source(home, source, revision, stage, *, allow_removals=False, migrate_dependencies=False):
     base = baseline(home)
     manifest = verify_source(source)
     names = {n for n in manifest['sha256'] if managed(n)} | {'MANIFEST.json'}
     missing = set(base['files']) - names
     if missing and not allow_removals:
         raise UpdateError('Обновление удаляет старые файлы; нужна отдельная миграция.')
-    for name in ('requirements.txt', 'requirements-voice.txt'):
-        if path_at(home, name).read_bytes() != (source / name).read_bytes():
-            raise UpdateError('Изменились зависимости. Нужна отдельная миграция окружения; бот сохранён.')
+    current_requirements = {name: digest(path_at(home, name).read_bytes()) for name in REQUIREMENTS}
+    dependency_change = any(current_requirements[name] != manifest['sha256'][name] for name in REQUIREMENTS)
+    if dependency_change and not migrate_dependencies:
+        raise UpdateError('Изменились зависимости. Обнови окружение через проверенный релиз; бот сохранён.')
+    if dependency_change and any(base['files'].get(name) != current_requirements[name] for name in REQUIREMENTS):
+        raise UpdateError('В списке зависимостей есть местные правки. Обновление отменено.')
+    if dependency_change and (manifest.get('environment_update') != 1 or 'tools/start_guard.py' not in names):
+        raise UpdateError('В целевом релизе отсутствует защита восстановления при запуске.')
     changes, conflicts = {}, []
     for name in sorted(names | missing):
         src = path_at(source, name)
@@ -516,6 +522,8 @@ def plan_source(home, source, revision, stage, *, allow_removals=False):
         raise UpdateError('Сохранены местные правки; обновление отменено. Конфликты: ' + ', '.join(conflicts[:12]))
     plan = {'schema': 1, 'id': stage.name, 'revision': revision, 'changes': changes,
             'baseline': base, 'created': time.time()}
+    if dependency_change:
+        plan['environment_manifest'] = digest((source / 'MANIFEST.json').read_bytes())
     json_write(stage / 'plan.json', plan)
     return plan
 
@@ -581,7 +589,8 @@ def prepare_release(home, version=None):
                 downgrade = compare_release_versions(release['version'], current_version) < 0
             except (TypeError, ValueError):
                 raise UpdateError('Не удалось безопасно сравнить текущую и выбранную версии.') from None
-            plan = plan_source(home, source, revision, stage, allow_removals=downgrade)
+            plan = plan_source(home, source, revision, stage, allow_removals=downgrade,
+                               migrate_dependencies=not downgrade)
             plan['downgrade'] = downgrade
             plan['release_settings'] = settings
             plan['current_version'] = current_version
@@ -646,7 +655,74 @@ def request(home, ident, *, allow_downgrade=False):
         return True
 
 
-def apply_files(home, ident):
+def environment_work(home, ident):
+    if not re.fullmatch('[a-f0-9]{16}', ident):
+        raise UpdateError('Некорректный номер миграции окружения.')
+    return path_at(home.parent, '.' + home.name + '.nook-update-' + ident)
+
+
+def environment_identity(path):
+    if path.is_symlink() or not path.is_dir():
+        raise UpdateError('Ожидался обычный каталог окружения.')
+    info = path.stat()
+    return [info.st_dev, info.st_ino]
+
+
+def prepare_environment(home, stage, plan):
+    if not plan.get('environment_manifest'):
+        return None
+    from legacy_migration import MigrationError, _inventory, _relocate_venv, build_staged_environment
+
+    if not plan.get('release_settings') or not (home / STATE).is_file():
+        raise UpdateError('Для миграции окружения нужна управляемая установка и подписанный релиз.')
+    for name in ('bot.py', 'tools/start_guard.py', 'nook_update.py'):
+        installed = path_at(home, name)
+        if not installed.is_file() or digest(installed.read_bytes()) != plan['baseline']['files'].get(name):
+            raise UpdateError('Изменён файл защиты запуска. Миграция окружения отменена: ' + name)
+    source = path_at(stage, 'source')
+    if digest(path_at(source, 'MANIFEST.json').read_bytes()) != plan['environment_manifest']:
+        raise UpdateError('Манифест подготовленного релиза изменился.')
+    verify_source(source)
+    live = path_at(home, '.venv')
+    work = environment_work(home, plan['id'])
+    try:
+        old_identity = environment_identity(live)
+        inventory = _inventory(live)
+        work.mkdir(mode=0o700)
+        try:
+            build_staged_environment(home, work, source, python=sys._base_executable)
+            candidate = work / '.venv'
+            _relocate_venv(candidate, live)
+            return {'old': old_identity, 'new': environment_identity(candidate)}, inventory
+        except Exception:
+            shutil.rmtree(work)
+            raise
+    except MigrationError as exc:
+        raise UpdateError(str(exc)) from None
+
+
+def switch_environment(home, ident, identities, *, rollback=False):
+    from legacy_migration import MigrationError, exchange_directories
+
+    live = path_at(home, '.venv')
+    candidate = path_at(environment_work(home, ident), '.venv')
+    actual = (environment_identity(live), environment_identity(candidate))
+    wanted = (identities['old'], identities['new'])
+    if not rollback:
+        wanted = wanted[::-1]
+    if actual == wanted:
+        return
+    if actual != wanted[::-1]:
+        raise UpdateError('Окружение изменилось. Обе копии сохранены.')
+    try:
+        exchange_directories(live, candidate, require_siblings=False)
+        sync_directory(live.parent)
+        sync_directory(candidate.parent)
+    except MigrationError as exc:
+        raise UpdateError(str(exc)) from None
+
+
+def apply_files(home, ident, *, environment=None):
     """Caller holds lock; bot MUST be stopped. Persistent intent precedes writes."""
     stage, plan = get_plan(home, ident)
     base = workspace(home)
@@ -663,6 +739,22 @@ def apply_files(home, ident):
     changes[STATE] = {'before': digest(old_state.read_bytes()) if old_state.exists() else None,
                       'after': digest(state_data), 'mode': 0o600}
     txn = {'id': ident, 'revision': plan['revision'], 'status': 'applying', 'files': changes, 'written': []}
+    if plan.get('environment_manifest'):
+        from legacy_migration import MigrationError, _inventory, _sync_trees, create_snapshot
+
+        if environment is None:
+            raise UpdateError('Новое окружение не подготовлено.')
+        identities, inventory = environment
+        if (environment_identity(path_at(home, '.venv')) != identities['old']
+                or _inventory(path_at(home, '.venv')) != inventory):
+            raise UpdateError('Окружение изменилось во время подготовки. Проверь обновление заново.')
+        work = environment_work(home, ident)
+        try:
+            txn['snapshot'] = create_snapshot(home, work / 'complete-backup')
+            _sync_trees(work)
+        except MigrationError as exc:
+            raise UpdateError(str(exc)) from None
+        txn['environment'] = identities
     required = len(state_data) + 16 * 1024 * 1024
     for name, item in changes.items():
         if item['before'] is not None:
@@ -686,6 +778,8 @@ def apply_files(home, ident):
         if not (base / 'transaction.json').exists() or read_json(base / 'transaction.json')['id'] != ident:
             shutil.rmtree(backup, ignore_errors=True)
         raise
+    if 'environment' in txn:
+        switch_environment(home, ident, txn['environment'])
     for name, item in changes.items():
         txn['written'].append(name)
         json_write(base / 'transaction.json', txn)
@@ -717,6 +811,8 @@ def restore(home):
             raise UpdateError('После обновления появились местные правки: ' + name)
         if item['before'] is not None and digest(path_at(backup, name).read_bytes()) != item['before']:
             raise UpdateError('Резервная копия повреждена: ' + name)
+    if 'environment' in txn:
+        switch_environment(home, txn['id'], txn['environment'], rollback=True)
     for name in reversed(txn['written']):
         p = path_at(home, name)
         item = txn['files'][name]
@@ -749,6 +845,13 @@ def service_matches(home, pid=None):
     return main_pid
 
 
+def environment_service_matches(home):
+    command = systemctl('show', 'nook.service', '--property=ExecStart', '--value').stdout
+    python = 'path=' + str(home / '.venv/bin/python') + ' ;'
+    if python not in command or str(home / 'bot.py') not in command:
+        raise UpdateError('Для автомиграции nook.service должна запускать bot.py из штатного окружения.')
+
+
 def offline(home):
     if not path_at(home, STATE).is_file():
         raise UpdateError('Старой установке сначала нужна проверенная миграция обновлятора.')
@@ -771,6 +874,14 @@ def heartbeat(home, failed=()):
     revision = read_json(state).get('revision') if state.exists() else 'legacy'
     json_write(base / 'health.json', {'pid': os.getpid(), 'time': time.time(),
                                      'revision': revision, 'failed_mods': sorted(failed)})
+
+
+def environment_held(home):
+    try:
+        txn = read_json(path_at(workspace(home), 'transaction.json'))
+    except FileNotFoundError:
+        return False
+    return 'environment' in txn and txn['status'] == 'awaiting_health'
 
 
 def healthy(home, revision, since, timeout=90, stable=20):
@@ -809,7 +920,31 @@ def notify(home, message):
 
 def worker(home, ident, pid):
     with lock(home):
-        _, plan = get_plan(home, ident)
+        if not re.fullmatch('[a-f0-9]{16}', ident):
+            raise UpdateError('Некорректный номер обновления.')
+        base = workspace(home)
+        txn_path = path_at(base, 'transaction.json')
+        previous = read_json(txn_path) if txn_path.exists() else {}
+        owns_transaction = previous.get('id') == ident
+        if owns_transaction and previous['status'] == 'success':
+            return
+        stop_intent = path_at(base, 'staged/' + ident + '/stop-intent.json')
+        incomplete = owns_transaction and previous['status'] in ('applying', 'awaiting_health')
+        if incomplete or stop_intent.exists():
+            unit_home = systemctl('show', 'nook.service', '--property=WorkingDirectory', '--value')
+            if unit_home.stdout.rstrip('\n') != str(home):
+                raise UpdateError('Служба обновления теперь указывает на другую установку.')
+            if incomplete:
+                systemctl('stop', 'nook.service')
+                with runtime_lock(home):
+                    restore(home)
+            systemctl('start', 'nook.service')
+            service_matches(home)
+            notify(home, '↩️ Обновление прервалось. Предыдущая версия Nook восстановлена и запущена.')
+            return
+        if owns_transaction:
+            raise UpdateError('Неизвестное состояние обновления.')
+        stage, plan = get_plan(home, ident)
         service_matches(home, pid)
         # Everything required for rollback is in this independent transient unit.
         pending = path_at(workspace(home), 'request.json')
@@ -826,13 +961,20 @@ def worker(home, ident, pid):
             sync_directory(pending.parent)
         stopped = False
         try:
-            systemctl('stop', 'nook.service')
+            if plan.get('environment_manifest'):
+                environment_service_matches(home)
+            environment = prepare_environment(home, stage, plan)
+            service_matches(home, pid)
+            get_plan(home, ident)
+            if environment is not None:
+                environment_service_matches(home)
+            json_write(stop_intent, {'id': ident})
             stopped = True
+            systemctl('stop', 'nook.service')
             with runtime_lock(home):
-                apply_files(home, ident)
+                apply_files(home, ident, environment=environment)
             since = time.time()
             systemctl('start', 'nook.service')
-            txn_path = workspace(home) / 'transaction.json'
             txn = read_json(txn_path)
             if not healthy(home, txn['revision'], since):
                 raise UpdateError('Новая версия не прошла проверку запуска.')
@@ -842,7 +984,6 @@ def worker(home, ident, pid):
         except BaseException:
             if stopped:
                 systemctl('stop', 'nook.service', check=False)
-                txn_path = workspace(home) / 'transaction.json'
                 try:
                     if txn_path.exists() and read_json(txn_path)['id'] == ident:
                         with runtime_lock(home):
@@ -853,6 +994,8 @@ def worker(home, ident, pid):
                     notify(home, '↩️ Обновление Nook не прошло проверку. Старый код восстановлен, служба запущена. Настройки и память не заменялись.')
                 except Exception:
                     notify(home, '⚠️ Обновление Nook остановлено. Автоматическое восстановление требует проверки; резервная копия кода сохранена в spool/updates/backups. Личные данные не заменялись.')
+            elif plan.get('environment_manifest'):
+                notify(home, '⚠️ Не удалось подготовить окружение для обновления Nook. Старая версия продолжает работать.')
             raise
 
 
@@ -862,6 +1005,7 @@ def freeze_supervisor(stage):
     supervisor = stage / 'worker.py'
     atomic(supervisor, Path(__file__).read_bytes())
     atomic(stage / 'release_channels.py', Path(__file__).with_name('release_channels.py').read_bytes())
+    atomic(stage / 'legacy_migration.py', Path(__file__).with_name('legacy_migration.py').read_bytes())
     return supervisor
 
 
@@ -870,11 +1014,16 @@ def launch(home, ident, pid):
     stage, _ = get_plan(home, ident)
     supervisor = freeze_supervisor(stage)
     p = subprocess.run(['systemd-run', '--user', '--collect', '--quiet',
-        '--unit=nook-update-' + ident, '--property=UMask=0077', sys.executable,
+        '--unit=nook-update-' + ident, '--property=UMask=0077',
+        '--property=Restart=on-abnormal', '--property=RestartSec=2s', sys._base_executable,
         str(supervisor), '--home', str(home), '_worker', ident, '--pid', str(pid)],
         capture_output=True, timeout=20)
     if p.returncode:
         raise UpdateError('Не удалось запустить независимый обновлятор. Бот не изменён.')
+
+
+def worker_active(ident):
+    return systemctl('is-active', '--quiet', 'nook-update-' + ident, check=False).returncode == 0
 
 
 def recover_interrupted(home):
@@ -946,7 +1095,8 @@ def main():
                     raise UpdateError('Для перехода на старую версию нужен флаг --allow-downgrade.')
                 freeze_supervisor(stage)
                 try:
-                    apply_files(home, args.id)
+                    environment = prepare_environment(home, stage, plan)
+                    apply_files(home, args.id, environment=environment)
                     txn_path = workspace(home) / 'transaction.json'
                     txn = read_json(txn_path)
                     txn['status'] = 'success'
@@ -967,6 +1117,7 @@ def main():
 
 
 if __name__ == '__main__':
+    sys.modules.setdefault('nook_update', sys.modules[__name__])
     try:
         main()
     except Exception as exc:

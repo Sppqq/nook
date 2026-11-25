@@ -210,7 +210,7 @@ def validate(root):
         if (parts.is_absolute() or '..' in parts.parts or not parts.parts
                 or str(parts) != rel or chr(92) in rel):
             raise SystemExit('Небезопасный путь в манифесте.')
-        if runtime_path(rel):
+        if runtime_path(rel) or parts.parts[0] == '.git':
             raise SystemExit('Локальные данные не могут входить в исходный манифест: ' + rel)
         p = root
         for part in parts.parts:
@@ -239,7 +239,7 @@ def validate(root):
                 continue
             p = Path(parent) / name
             rel = p.relative_to(root).as_posix()
-            if runtime_path(rel):
+            if rel == '.git' or runtime_path(rel):
                 continue
             actual.add(rel)
             if p.suffix == '.py':
