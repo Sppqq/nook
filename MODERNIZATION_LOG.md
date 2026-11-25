@@ -1,5 +1,13 @@
 # Modernization log
 
+## Iteration 12 — switch dependencies in a signed update
+
+- Prepare and validate a separate Python environment before stopping the
+  service. Verify a full stopped-installation snapshot before exchanging it.
+- Use the frozen updater to restore the original environment and source.
+  Keep the current systemd unit, channel choice, and local runtime files.
+- Scan the resolved base and voice Python dependencies with `pip-audit`.
+
 ## Iteration 11 — verify queued Codex recovery
 
 - Exercised the background resume loop with one distant reset and one

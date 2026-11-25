@@ -149,7 +149,7 @@ def build(root=ROOT):
     if 'LICENSE' not in names or 'install.py' not in names:
         raise SystemExit('Stage the reviewed source files with git add before building.')
     files = {name: validate_file(root, name) for name in names if name != 'MANIFEST.json'}
-    manifest = encode({'format': 1, 'update_api': 1, 'version': version, 'sha256': {
+    manifest = encode({'format': 1, 'update_api': 1, 'environment_update': 1, 'version': version, 'sha256': {
         name: hashlib.sha256(data).hexdigest() for name, data in files.items()}})
     (root / 'MANIFEST.json').write_bytes(manifest)
     files['MANIFEST.json'] = manifest

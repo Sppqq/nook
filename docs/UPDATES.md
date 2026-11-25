@@ -10,14 +10,14 @@
 
 ### Что сохраняется
 
-Обновляются только разрешённые пути исходников. Не заменяются `config.json`, `secrets.env`, `state.json`, `memory/`, `spool/` с перепиской и заданиями, `keys/`, `nodes.json`, `ssh_config`, файлы провайдеров в `.codex/`, локальный `AGENTS.md`, Python-окружение и служба systemd. Шаблоны из `templates/runtime/` повторно не разворачиваются. Свои моды и навыки сохраняются; если новый файл проекта столкнётся с твоим — обновление отменится.
+Обновляются только разрешённые пути исходников. Не заменяются `config.json`, `secrets.env`, `state.json`, `memory/`, `spool/` с перепиской и заданиями, `keys/`, `nodes.json`, `ssh_config`, файлы провайдеров в `.codex/`, локальный `AGENTS.md` и служба systemd. Python-окружение меняется только при поддерживаемом обновлении зависимостей. Шаблоны из `templates/runtime/` повторно не разворачиваются. Свои моды и навыки сохраняются; если новый файл проекта столкнётся с твоим — обновление отменится.
 
 Установщик записывает хеши установленных исходников после подстановки местных путей. Если и ты, и GitHub изменили один файл, обновлятор откажется писать поверх него. Местная правка сохраняется и тогда, когда на GitHub этот файл не менялся. Автоматического слияния, `git reset`, очистки папки и переустановки с новыми настройками нет.
 
 ### Порядок обновления
 
 1. В старом режиме загружается конкретный коммит `main`. Для выбранного канала Nook проверяет релиз, тег, SHA-256, архив и Sigstore-аттестацию официального workflow. Для проверки происхождения установи актуальный GitHub CLI (`gh`). Вход в GitHub не требуется.
-2. Изменения зависимостей и несовместимый `update_api` требуют отдельной миграции. При подтверждённом переходе на старый релиз удаляются только неизменённые файлы программы из установочного эталона. Конфликт с местной правкой останавливает переход.
+2. Несовместимый `update_api` требует отдельной миграции. При подтверждённом переходе на старый релиз удаляются только неизменённые файлы программы из установочного эталона. Конфликт с местной правкой останавливает переход.
 3. Подтверждённая версия ждёт завершения активных задач и очереди. Проверка действительна час; потом её нужно повторить.
 4. Отдельный пользовательский процесс systemd останавливает именно `nook.service` этой установки. Блокировка не позволяет менять исходники, пока новый бот с этой блокировкой работает.
 5. До первой записи сохраняются старые файлы, права и журнал операции в `spool/updates/backups/<номер>`. Меняются только файлы программы; установщик не запускается.
@@ -32,6 +32,23 @@
 
 Автоматический перезапуск поддерживает установку через пользовательскую `nook.service`. PM2, контейнеры, вручную запущенные боты и исходный частный Домовой требуют отдельной адаптации. Нельзя подменять их публичным Nook поверх неизвестной структуры.
 
+### Смена зависимостей через Telegram
+
+После получения нового обновлятора выбери канал официальных релизов и
+подтверди обновление обычной кнопкой. Подписанный релиз должен поддерживать
+смену окружения, а служба — запускать `bot.py` из штатной папки `.venv`.
+Локальные правки списков зависимостей и защиты запуска, а также пакеты из
+VCS требуют ручного согласования. Версии пользовательских пакетов из
+индекса сохраняются. Nook строит и проверяет окружение до остановки службы.
+Проверенный полный снимок сохраняется после остановки в
+`.<имя-инстанса>.nook-update-<номер>/complete-backup` рядом с инстансом.
+
+Обновлённый бот ждёт проверки перед приёмом задач. При сбое запуска либо
+обрыве транзакции защита возвращает прежние код и окружение. Файлы владельца
+и внешние данные провайдеров остаются на прежних путях. Полный снимок доступен
+для отдельного восстановления данных. Переход на старый релиз со сменой
+зависимостей требует отдельной миграции.
+
 ### Переход со старых версий
 
 В `v0.1.1` можно воспользоваться кнопкой **Ещё → Моды → Обновить Nook**,
@@ -39,8 +56,8 @@
 совпадающих зависимостях. После проверки запуска Nook сохраняет режим
 `main`. Канал официальных релизов выбирает владелец в настройках обновлений.
 
-Для `v0.1.0`, где кнопки ещё нет, и для перехода со сменой зависимостей
-используй миграцию из SSH. Она поддерживает точные публичные версии
+Для `v0.1.0`, где кнопки ещё нет, и для смены зависимостей через исходный
+обновлятор `v0.1.1` используй миграцию из SSH. Она поддерживает точные публичные версии
 `v0.1.0` и `v0.1.1`.
 
 На Linux под владельцем пользовательской службы дождись завершения задач и
@@ -127,10 +144,12 @@ Open **More → Mods → Обновления и резервные копии**
 
 The updater plans source changes against the installed hashes. Local
 modifications and custom files are preserved. A conflict stops the update.
-Dependency and update API changes require separate migration. An explicitly
-approved downgrade can remove unchanged managed source paths.
+Update API changes require separate migration. An explicitly approved
+downgrade can remove unchanged managed source paths. An installed instance
+with the modern updater can update dependencies from a compatible signed
+release after its owner selects a release channel.
 
-Configuration, secrets, state, memory, conversations, jobs, SSH keys/nodes, provider configuration, `AGENTS.md`, the virtual environment, and systemd configuration are preserved. Runtime templates are never reseeded. Custom mods and skills are preserved or cause an explicit conflict. The installer records hashes after rendering local paths.
+Configuration, secrets, state, memory, conversations, jobs, SSH keys/nodes, provider configuration, `AGENTS.md`, and systemd configuration are preserved. The virtual environment changes only for a supported dependency update. Runtime templates are never reseeded. Custom mods and skills are preserved or cause an explicit conflict. The installer records hashes after rendering local paths.
 
 Once confirmed, the enabled `self_update` mod waits for active and queued agent work to finish and reserves both agent lanes. An independent user-systemd process stops this installation's `nook.service`, backs up every affected source file and its permissions, writes a persistent transaction journal, applies the source changes, and restarts the bot. The bot and updater share a process lock. The check expires after one hour.
 
@@ -148,9 +167,12 @@ adaptation.
 
 Once compatible code reaches `main`, v0.1.1 can use its existing Telegram
 update button if dependencies match. Nook keeps using `main` until the
-owner selects a release channel. For v0.1.0 or dependency changes, use
-the signed-release SSH migration described above. Keep the original
-installed hashes so migration can identify local edits.
+owner selects a release channel. Use the signed-release SSH migration for
+v0.1.0 or dependency changes with the original v0.1.1 updater. The current
+updater checks the new environment while the old service runs and verifies a
+full snapshot after stopping it. Failed startup or interruption restores
+both the original source and environment. Runtime files and external
+provider stores stay in place. The snapshot supports manual data recovery.
 
 From the installed directory, use `bin/nook-update check`, then `bin/nook-update request <id> --yes`, and `bin/nook-update status`. Stop the service and external writers for an offline instance snapshot. Online backup from Telegram reserves the agent lanes, uses SQLite's Backup API, and fails if other captured files change. External provider data is opt-in via `--include-providers` and restores under `provider-home/`. Use age recipient and identity options to encrypt and verify backups, `--keep N` to rotate after verification, and the `--max-*` options to support larger instances. For manual recovery, stop `nook.service`, run `bin/nook-update rollback-offline --yes`, and start it again. `apply-offline <id> --yes` is for administrators with a stopped bot and does not perform startup health checks. Rollback refuses to overwrite edits made after the update.
 
@@ -162,4 +184,4 @@ Channel policy and release workflow: [RELEASE_POLICY.md](../RELEASE_POLICY.md). 
 
 ## Maintainer compatibility contract
 
-`MANIFEST.json` uses `format: 1` and `update_api: 1`. Increment `update_api` when a release requires runtime data/configuration changes or a different update protocol. The current updater refuses other values. Do not add migrations with import/startup side effects under the same API. Dependency changes and source deletions are intentionally refused even under API 1. Test migrations separately before making them available as an automatic update.
+`MANIFEST.json` uses `format: 1` and `update_api: 1`. Increment `update_api` when a release requires runtime data/configuration changes or a different update protocol. The current updater refuses other values. Do not add migrations with import/startup side effects under the same API. Targets advertising `environment_update: 1` support the provisional startup gate. Dependency changes require a compatible signed upgrade and a clean local dependency baseline. Development-branch dependency changes and source deletions during an upgrade require separate migration.

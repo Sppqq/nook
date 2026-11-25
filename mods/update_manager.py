@@ -191,6 +191,8 @@ def setup(m):
                     f"Канал: {channel_name(plan.get('channel', current['channel']))}\n"
                     f"Файлов программы: {len(plan['changes'])}\n"
                     'Местные конфликты отменяют обновление; runtime-данные не заменяются.')
+            if plan.get('environment_manifest'):
+                text += '\nБудут подготовлены новое окружение и полная локальная резервная копия.'
             if body:
                 text += '\n\n' + body
             action = 'install-update'
@@ -219,7 +221,7 @@ def setup(m):
             await asyncio.to_thread(nook_update.service_matches, home, os.getpid())
             queued = await asyncio.to_thread(nook_update.request, home, ctx.arg, allow_downgrade=allow_downgrade)
             await ctx.edit('Обновление поставлено в очередь. Оно начнётся после завершения активных задач; '
-                           'независимый updater проверит запуск и восстановит предыдущий код при ошибке.'
+                           'независимый updater проверит запуск и откатит изменения при ошибке.'
                            if queued else 'Изменений нет.')
         except nook_update.UpdateError as exc:
             await ctx.reply(str(exc))

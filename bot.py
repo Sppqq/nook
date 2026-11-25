@@ -5319,19 +5319,19 @@ async def main():
 
 async def run_main():
     from legacy_migration import startup_held
-    from nook_update import heartbeat
+    from nook_update import environment_held, heartbeat
 
     home = Path(HOME)
     for d in (OUTBOX, INBOX):
         os.makedirs(d, exist_ok=True)
     os.makedirs(modsys.SPOOL, exist_ok=True)
-    held = startup_held(home)
+    held = startup_held(home) or environment_held(home)
     await mods_reload(start_tasks=not held)
     me = await bot.get_me()
     if held:
         # Let the external supervisor verify the candidate before polling
         # Telegram or allowing background tasks to claim real work.
-        while startup_held(home):
+        while startup_held(home) or environment_held(home):
             heartbeat(home, REG.failed)
             await asyncio.sleep(2)
         REG.start_tasks()

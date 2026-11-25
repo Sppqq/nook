@@ -562,11 +562,11 @@ def _safe_target(root, name):
     return path
 
 
-def exchange_directories(left, right):
-    """Atomically exchange sibling directories on Linux or fail before mutation."""
+def exchange_directories(left, right, *, require_siblings=True):
+    """Atomically exchange directories on Linux or fail before mutation."""
     left, right = Path(left), Path(right)
     if (left.is_symlink() or right.is_symlink() or not left.is_dir() or not right.is_dir()
-            or left.parent.resolve() != right.parent.resolve()
+            or require_siblings and left.parent.resolve() != right.parent.resolve()
             or left.stat().st_dev != right.stat().st_dev):
         raise MigrationError('Атомарное переключение требует соседние каталоги на одной файловой системе.')
     libc = ctypes.CDLL(None, use_errno=True)

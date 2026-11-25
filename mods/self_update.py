@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 
 from nook_update import (UpdateError, get_plan, launch, prepare, read_json,
-                         request, service_matches, workspace)
+                         request, service_matches, worker_active, workspace)
 
 
 def setup(m):
@@ -21,11 +21,13 @@ def setup(m):
             version = plan.get('version') or plan['revision'][:10]
             channel = plan.get('channel')
             channel_note = ('\nКанал: ' + channel) if channel else '\nКанал: прежний режим main'
+            backup_note = ('Будет полная локальная копия и проверка нового окружения.'
+                           if plan.get('environment_manifest') else 'Будет резервная копия кода.')
             await ctx.reply(f'🏡 **Обновление Nook**\n\nВерсия: `{version}`{channel_note}'
                 f'\nФайлов программы: {len(plan["changes"])}' +
                 '\n\nНастройки, память, переписка и свои дополнения сохранятся. '
                 'При конфликте с местными правками обновление остановится. '
-                'Будет резервная копия кода и проверка запуска с откатом при неудаче.',
+                + backup_note + ' При сбое запуска сработает откат.',
                 [[m.btn('Обновить с резервной копией', 'apply', plan['id'])],
                  [m.btn('Отмена', 'cancel')]])
         except UpdateError as exc:
@@ -39,7 +41,7 @@ def setup(m):
             await asyncio.to_thread(service_matches, home, os.getpid())
             await asyncio.to_thread(request, home, ctx.arg)
             await ctx.edit('Обновление поставлено в очередь. Дождусь завершения задач, '
-                           'сохраню код и ненадолго перезапущусь. Результат пришлю сюда.')
+                           'сделаю резервную копию и перезапущусь. Результат пришлю сюда.')
         except UpdateError as exc:
             await ctx.reply(str(exc))
 
@@ -64,11 +66,15 @@ def setup(m):
             await lane.lock.acquire()
         try:
             ident = read_json(req)['id']
-            await asyncio.to_thread(get_plan, home, ident)
+            _, plan = await asyncio.to_thread(get_plan, home, ident)
             await asyncio.to_thread(launch, home, ident, os.getpid())
             # Keep both agent lanes reserved until the independent worker stops
             # this service. If it cannot stop us, release after a bounded wait.
             await asyncio.sleep(30)
+            if plan.get('environment_manifest'):
+                while await asyncio.to_thread(worker_active, ident):
+                    await asyncio.sleep(10)
+                return
             await m.send('Обновлятор не остановил службу вовремя. Проверь статус обновления перед повтором.')
         except UpdateError as exc:
             if req.exists():

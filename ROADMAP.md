@@ -13,8 +13,12 @@
 - The original v0.1.1 Telegram updater can adopt the candidate through
   its existing code-only main update. A disposable user-systemd test
   exercises the original worker, startup health, channel preservation and
-  recovery after interruption. Changing dependency sets or migrating
-  v0.1.0 still uses the signed-release bootstrap.
+  recovery after interruption. The original v0.1.0 needs the signed-release
+  bootstrap because it has no update button.
+- Managed installations can adopt a signed compatible release with a new
+  dependency set through Telegram. The updater verifies an offline snapshot,
+  waits for candidate health, and restores the old code and environment on
+  failure. Run the full flow with real Telegram and Codex on a dedicated VPS.
 - An attested v0.1.2-alpha.1 is published. Beta, RC and Stable gates remain.
 
 - Ported opt-in Codex routing to the public release tree. The disposable
@@ -208,7 +212,8 @@
   with a disposable user systemd service and a local candidate artifact.
   Verify the published artifact with a disposable live bot. v0.1.0 needs
   an initial bootstrap because its immutable source has no Telegram updater.
-  Dependency-changing updates from Telegram still require a migration path.
+  The current updater can migrate dependencies after adoption. The
+  original v0.1.1 updater requires matching dependencies for first adoption.
 - Raise measured meaningful coverage from 41% overall / 19% `bot.py` toward
   50% / 30%; prioritize direct bot lifecycle and security boundary behavior.
 - Add bounded protocol version/capability negotiation and revocation tests

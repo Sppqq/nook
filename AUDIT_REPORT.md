@@ -29,6 +29,16 @@ and 61% in `legacy_migration.py`. The 90% core target remains open.
 
 ## Current update audit
 
+- Signed dependency updates build and validate a separate Python environment
+  while the service runs. Cutover takes a full verified offline snapshot and
+  records both directory identities before the atomic exchange. Recovery
+  checks those identities and restores both source and the old environment.
+- The candidate withholds polling and scheduled tasks while reporting startup
+  health. The snapshot includes local installation data. External provider
+  stores remain on their existing paths. Trusted module setup can still
+  produce effects beyond the updater's control.
+- `pip-audit` found no known advisories in the resolved base and voice
+  requirements during the local maintainer check.
 - The exact published v0.1.1 worker has no `_recover` command. The startup
   guard recognizes it by SHA-256, uses its existing locks and allows the new
   bot to report health while the historical supervisor is active. If the

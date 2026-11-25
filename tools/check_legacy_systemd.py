@@ -1,4 +1,4 @@
-"""Exercise both historical source trees against a disposable user systemd unit."""
+"""Exercise historical and dependency-changing updates in disposable user systemd services."""
 import argparse
 from importlib.util import module_from_spec, spec_from_file_location
 import json
@@ -360,6 +360,104 @@ def check(base, version, mode, artifact):
         run('systemctl', '--user', 'daemon-reload')
 
 
+def check_dependency_update(base, artifact):
+    home = base / 'instance'
+    home.mkdir()
+    nook_update.unpack_zip(artifact, home)
+    (home / 'NOOK_RELEASE.json').unlink()
+    runtime = seed_runtime(home)
+    service = """\
+import os
+from pathlib import Path
+import sys
+import time
+from tools.start_guard import recover
+home = Path.cwd()
+if recover(home):
+    os.execv(sys.executable, [sys.executable, *sys.argv])
+from nook_update import environment_held, heartbeat
+if VERSION == 'new':
+    import colorama
+    assert colorama.__version__ == '0.4.6'
+while environment_held(home):
+    heartbeat(home)
+    time.sleep(.1)
+(home / 'memory/started').write_text(VERSION)
+while True:
+    time.sleep(.1)
+"""
+    (home / 'bot.py').write_text('VERSION = "old"\n' + service)
+    (home / 'requirements.txt').write_text('# old fixture\n')
+    (home / 'requirements-voice.txt').write_text('# old voice fixture\n')
+    python = home / '.venv/bin/python'
+    run(sys.executable, '-m', 'venv', '--without-pip', str(home / '.venv'))
+    nook_update.record_install(home)
+    old_environment = nook_update.environment_identity(home / '.venv')
+    settings = nook_update.save_update_settings(home, channel='stable')
+    ident = 'fedcba9876543210'
+    stage = nook_update.workspace(home) / 'staged' / ident
+    source = stage / 'source'
+    source.mkdir(parents=True)
+    nook_update.unpack_zip(artifact, source)
+    (source / 'NOOK_RELEASE.json').unlink()
+    (source / 'bot.py').write_text('VERSION = "new"\n' + service)
+    (source / 'requirements.txt').write_text('colorama==0.4.6\n')
+    (source / 'requirements-voice.txt').write_text('# old voice fixture\n')
+    manifest = nook_update.read_json(source / 'MANIFEST.json')
+    for name in ('bot.py', *nook_update.REQUIREMENTS):
+        manifest['sha256'][name] = sha256((source / name).read_bytes()).hexdigest()
+    nook_update.json_write(source / 'MANIFEST.json', manifest)
+    plan = nook_update.plan_source(home, source, 'b' * 40, stage, migrate_dependencies=True)
+    plan.update(channel='stable', release_settings=settings)
+    nook_update.json_write(stage / 'plan.json', plan)
+    nook_update.freeze_supervisor(stage)
+    assert nook_update.request(home, ident)
+
+    unit = 'nook-update-fixture-' + sha256(str(base).encode()).hexdigest()[:16] + '.service'
+    unit_path = Path.home() / '.config/systemd/user' / unit
+    unit_path.parent.mkdir(parents=True, exist_ok=True)
+    unit_contents = f'[Service]\nWorkingDirectory={home}\nExecStart="{python}" "{home / "bot.py"}"\n'
+    unit_path.write_text(unit_contents)
+    systemctl = nook_update.systemctl
+    health = nook_update.healthy
+
+    def fixture_systemctl(*args, **kwargs):
+        return systemctl(*(unit if arg == 'nook.service' else arg for arg in args), **kwargs)
+
+    try:
+        # Use the v0.1.1 unit layout without ExecStartPre. The bot entry point
+        # invokes its guard before loading the Python dependencies.
+        fixture_systemctl('daemon-reload')
+        fixture_systemctl('start', 'nook.service')
+        started = home / 'memory/started'
+        run('timeout', '10', 'bash', '-c', 'until test -s "$1"; do sleep .1; done', 'fixture', str(started))
+        with (patch.object(nook_update, 'systemctl', fixture_systemctl),
+              patch.object(nook_update, 'healthy', lambda *args: health(*args, timeout=25, stable=2)),
+              patch.object(nook_update, 'notify') as notify):
+            nook_update.worker(home, ident, nook_update.service_matches(home))
+            notify.assert_called_once()
+        run('timeout', '10', 'bash', '-c', 'until [[ "$(cat "$1")" == "new" ]]; do sleep .1; done',
+            'fixture', str(started))
+        assert nook_update.environment_identity(home / '.venv') != old_environment
+        journal = nook_update.read_json(nook_update.workspace(home) / 'transaction.json')
+        assert journal['status'] == 'success'
+        assert_runtime(Path(journal['snapshot']['root']), runtime)
+        assert_runtime(home, runtime)
+        fixture_systemctl('stop', 'nook.service')
+        nook_update.restore(home)
+        assert nook_update.environment_identity(home / '.venv') == old_environment
+        fixture_systemctl('start', 'nook.service')
+        run('timeout', '10', 'bash', '-c', 'until [[ "$(cat "$1")" == "old" ]]; do sleep .1; done',
+            'fixture', str(started))
+        assert_runtime(home, runtime)
+        assert unit_path.read_text() == unit_contents
+        print('Dependency-changing update, startup gate and rollback passed with user systemd', flush=True)
+    finally:
+        fixture_systemctl('stop', 'nook.service', check=False)
+        unit_path.unlink(missing_ok=True)
+        fixture_systemctl('daemon-reload')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('artifact', type=Path)
@@ -368,6 +466,8 @@ def main():
                           ('0.1.1', 'offline'), ('0.1.1', 'interrupt'), ('0.1.1', 'button')):
         with tempfile.TemporaryDirectory(prefix='nook-systemd-') as base:
             check(Path(base), version, mode, args.artifact.resolve())
+    with tempfile.TemporaryDirectory(prefix='nook-update-systemd-') as base:
+        check_dependency_update(Path(base), args.artifact.resolve())
 
 
 if __name__ == '__main__':
