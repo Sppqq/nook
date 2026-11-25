@@ -115,6 +115,44 @@ class TelegramDispatchTests(unittest.IsolatedAsyncioTestCase):
         start_tasks.assert_not_called()
         polling.assert_not_awaited()
 
+    async def test_device_login_only_replaces_auth_after_cli_success(self):
+        runtime = self.runtime
+        auth_home = self.home / '.codex'
+        auth_home.mkdir(mode=0o700)
+        auth = auth_home / 'auth.json'
+        auth.write_text('{"tokens":{"access_token":"previous-fixture"}}')
+        auth.chmod(0o600)
+        previous = auth.read_text()
+        cli = self.home / 'device-login-fixture'
+        cli.write_text('''#!/usr/bin/env python3
+import os, pathlib, sys
+assert sys.argv[1:] == ['login', '--device-auth']
+pathlib.Path(os.environ['CODEX_HOME'], 'auth.json').write_text(
+    '{"tokens":{"access_token":"new-fixture"}}')
+sys.exit(0 if pathlib.Path(__file__).with_suffix('.approve').exists() else 1)
+''')
+        cli.chmod(0o700)
+        runtime['CODEX'] = str(cli)
+        runtime['send'] = AsyncMock()
+        runtime['send_tmp'] = AsyncMock()
+        runtime['STATE'].update(main_thread='old-thread', fallback_until=100, ui_language='en')
+        with patch.object(runtime['os'].path, 'expanduser', return_value=str(auth_home)):
+            await runtime['do_login'](7)
+            self.assertEqual(auth.read_text(), previous)
+            self.assertEqual(runtime['STATE']['main_thread'], 'old-thread')
+            self.assertIn('Could not sign in', runtime['send'].await_args.args[1])
+            cli.with_suffix('.approve').touch()
+            await runtime['do_login'](7)
+
+        self.assertEqual(json.loads(auth.read_text())['tokens']['access_token'], 'new-fixture')
+        self.assertEqual(auth.stat().st_mode & 0o777, 0o600)
+        backup, = auth_home.glob('auth.json.bak-*')
+        self.assertEqual(backup.read_text(), previous)
+        self.assertEqual(backup.stat().st_mode & 0o777, 0o600)
+        self.assertIsNone(runtime['STATE']['main_thread'])
+        self.assertEqual(runtime['STATE']['fallback_until'], 0)
+        self.assertIn('Codex account connected', runtime['send_tmp'].await_args.args[1])
+
     async def test_owner_pool_strategy_and_cli_resume_after_quota(self):
         from test_codex_pool import fake_accounts
         pool = self.runtime["REG"].mods["codex_pool"].pool

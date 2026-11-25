@@ -6,8 +6,8 @@ Review the signed release path, the legacy updater's restore points, the
 isolated extension broker and policy ownership, and pooled credential and
 session handling. Reproduce the upgrade and rollback with disposable
 accounts and include a long run on a separate VPS. The results below are
-maintainer checks. The Nightly local run passed 196 tests with one optional
-`age` test skipped. Line coverage was 25.2% in `bot.py`, 85.7% in
+maintainer checks. The Nightly local run completed 206 tests with one optional
+`age` test skipped. Line coverage was 29.4% in `bot.py`, 87.8% in
 `codex_pool.py`, 74.7% in `nook_update.py`, and 62.4% in
 `legacy_migration.py`. The 90% core target remains open.
 
@@ -19,6 +19,22 @@ GitHub reports required Python 3.11 and 3.12 checks for `main`. The
 `release-prerelease` environment is visible. The maintainer's write-level
 account could not verify a `release-stable` environment or tag protections.
 Verify these settings with repository-admin access before promotion.
+
+## Oldest supported migration
+
+The disposable v0.1.0 scenario traverses the historical and candidate
+Telegram dispatchers on Linux user systemd. It supplies synthetic state,
+a local candidate archive and a stub Telegram transport. It checks legacy
+main retention after cutover and after the channel preview, followed by
+owner confirmation with automatic updates off. The public v0.1.0 release
+predates the updater button, so the supported entry point is the signed
+bootstrap over SSH. Keep the real Telegram and published-release run in the
+pre-promotion checklist.
+
+A local Bubblewrap test validates the opted-in port of a data-only function,
+its activation and rollback and the preservation of its legacy data.
+Approval is simulated in that test. Compare behavior with the owner's real
+modules before switching their trusted wrappers.
 
 ## Telegram language preference
 

@@ -29,18 +29,19 @@ class AccountTests(unittest.IsolatedAsyncioTestCase):
             return {}
         self.mod.cli=cli
         self.core={'CODEX_LOGIN_LOCK':asyncio.Lock(),'user_lane':SimpleNamespace(current=None),'bg_lane':SimpleNamespace(current=None),
-                   'LIMITS_CACHE':{'data':1,'at':1},'save_state':lambda:None, 'win_name':lambda n:f'{n} min'}
+                   'LIMITS_CACHE':{'data':1,'at':1},'save_state':lambda:None, 'win_name':lambda n, *, english=False: f'{n // 60} h' if english else f'{n} min'}
         exec('async def login(chat): pass',self.core)
         test=self
         class Mod:
             def __init__(self):
-                self.handlers={};self.tasks=[]
+                self.handlers={};self.tasks=[];self.english=False
                 self.core=SimpleNamespace(codex_login=test.core['login'],codex_pool_runtime=SimpleNamespace(busy=set()),state={'main_thread':'merc-keep','fallback_until':100})
             def button(self,*a,**kw):return self.callback('switch')
             def callback(self,key):
                 def register(fn):self.handlers[key]=fn;return fn
                 return register
             def btn(self,*a):return a
+            def text(self, russian, english):return english if self.english else russian
             async def send(self,text):pass
         class Ctx:
             arg=test.mod.account_id(test.stored[1]);chat=123
@@ -94,3 +95,21 @@ class AccountTests(unittest.IsolatedAsyncioTestCase):
         await self.m.handlers['limits'](self.ctx)
         self.assertIn(('list', '--api', '--json'), self.calls)
         self.assertIn('300 min: **42%**', messages[0])
+
+    async def test_account_picker_and_quota_follow_owner_language(self):
+        self.m.english = True
+        self.stored[0]['usage'] = {
+            'source': 'api', 'refresh': {'status': 'ok'},
+            'primary': {'used_percent': 42, 'window_minutes': 300},
+        }
+        messages = []
+
+        async def reply(text, buttons=None):
+            messages.append((text, buttons))
+
+        self.ctx.reply = reply
+        await self.m.handlers['switch'](self.ctx)
+        self.assertIn('Choose a Codex account', messages[0][0])
+        self.assertEqual(messages[0][1][0][0][0], '✅ Account 1')
+        await self.m.handlers['limits'](self.ctx)
+        self.assertIn('5 h: **42%** · resets unknown', messages[1][0])

@@ -91,6 +91,11 @@ bash /path/to/bootstrap.sh --migrate --home "$HOME/nook" --version X.Y.Z --yes
 python3 /path/to/target-release/source/legacy_migration.py recover --home "$HOME/nook"
 ```
 
+После успешного перехода открой **Ещё → Моды → Обновления и резервные копии**
+в Telegram. Nook продолжает отслеживать `main`, пока ты не подтвердишь
+официальный канал. Просмотр канала и его подтверждение отделены от установки
+релиза. Автообновления управляются отдельно.
+
 ### Терминал и восстановление
 
 Из установленной папки:
@@ -140,7 +145,7 @@ systemctl --user start nook.service
 
 ## English
 
-Open **More → Mods → Обновления и резервные копии** to select a channel, review releases, pin a version and configure checks. The installer fetches the newest eligible published release for the selected channel. `bootstrap.sh --version X` installs and pins exact published version `X`. Use `--dev` for a development installation. Release installs and updates require a current GitHub CLI (`gh`) for Sigstore verification without login. Confirm updates separately from the installer.
+Open **More → Mods → Updates and backups** to select a channel, review releases, pin a version and configure checks. The installer fetches the newest eligible published release for the selected channel. `bootstrap.sh --version X` installs and pins exact published version `X`. Use `--dev` for a development installation. Release installs and updates require a current GitHub CLI (`gh`) for Sigstore verification without login. Confirm updates separately from the installer.
 
 The updater plans source changes against the installed hashes. Local
 modifications and custom files are preserved. A conflict stops the update.
@@ -174,13 +179,17 @@ full snapshot after stopping it. Failed startup or interruption restores
 both the original source and environment. Runtime files and external
 provider stores stay in place. The snapshot supports manual data recovery.
 
+After migration, confirm an official channel in Telegram to leave legacy main
+mode. Previewing a channel does not save it. Choosing a channel, installing
+a release and enabling automatic updates are separate actions.
+
 From the installed directory, use `bin/nook-update check`, then `bin/nook-update request <id> --yes`, and `bin/nook-update status`. Stop the service and external writers for an offline instance snapshot. Online backup from Telegram reserves the agent lanes, uses SQLite's Backup API, and fails if other captured files change. External provider data is opt-in via `--include-providers` and restores under `provider-home/`. Use age recipient and identity options to encrypt and verify backups, `--keep N` to rotate after verification, and the `--max-*` options to support larger instances. For manual recovery, stop `nook.service`, run `bin/nook-update rollback-offline --yes`, and start it again. `apply-offline <id> --yes` is for administrators with a stopped bot and does not perform startup health checks. Rollback refuses to overwrite edits made after the update.
 
 The journal and source backups can recover interrupted code changes. Keep a
 separate instance backup for restoring runtime data. The initial migration
 from a legacy updater can require manual offline recovery.
 
-Channel policy and release workflow: [RELEASE_POLICY.md](../RELEASE_POLICY.md). The release workflow validates tags and tests before publishing `.zip`, `source.json` and `SHA256SUMS`; same-artifact promotion and detached signatures are not yet implemented.
+Channel policy and release workflow: [RELEASE_POLICY.md](../RELEASE_POLICY.md). The verified workflow checks the tag and tests, then attaches the Sigstore bundle to the release. Promotion checks the published predecessor and compares application trees.
 
 ## Maintainer compatibility contract
 

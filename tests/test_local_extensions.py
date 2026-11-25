@@ -139,3 +139,45 @@ def run(payload):
             self.assertEqual(response, dict.fromkeys(('host_file', 'host_loopback', 'secret_env', 'home', 'etc'), False))
         with self.assertRaises(ExtensionError):
             execute(b'NOOK_EXTENSION_API = 2\ndef run(payload): return payload\n', {})
+
+    def test_owner_moves_data_only_behavior_and_can_roll_back(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            store = extensions.Store(home)
+            saved = home / 'legacy_state.json'
+            original = '{"title":"Owner reminder","count":2}'
+            saved.write_text(original)
+            payload = {'title': 'Owner reminder', 'count': 2}
+            expected = {'label': 'Owner reminder ×2'}
+            source = home / 'formatter.py'
+            body = """\
+NOOK_EXTENSION_API = 1
+
+def run(payload):
+    if payload == {'healthcheck': True}:
+        return {'ok': True}
+    return {'label': '{} ×{}'.format(payload['title'], payload['count'])}
+"""
+            source.write_text(body)
+            with patch.object(extensions, 'approval', return_value=False) as approved:
+                store.stage('mod', 'formatter', '1.0.0', source)
+                try:
+                    store.test('mod', 'formatter', '1.0.0')
+                except ExtensionError as error:
+                    if os.environ.get('NOOK_REQUIRE_SANDBOX') == '1':
+                        raise
+                    self.skipTest(str(error))
+                with self.assertRaisesRegex(ExtensionError, 'разрешение владельца'):
+                    store.activate('mod', 'formatter', '1.0.0')
+
+                approved.return_value = True
+                store.activate('mod', 'formatter', '1.0.0')
+                self.assertEqual(store.run('mod', 'formatter', payload), expected)
+                source.write_text(body.replace("'{} ×{}'", "'{} ({})'"))
+                store.stage('mod', 'formatter', '1.0.1', source)
+                store.test('mod', 'formatter', '1.0.1')
+                store.activate('mod', 'formatter', '1.0.1')
+                self.assertEqual(store.run('mod', 'formatter', payload), {'label': 'Owner reminder (2)'})
+                self.assertEqual(store.rollback('mod', 'formatter'), '1.0.0')
+                self.assertEqual(store.run('mod', 'formatter', payload), expected)
+                self.assertEqual(saved.read_text(), original)

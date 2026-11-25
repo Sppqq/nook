@@ -1,5 +1,19 @@
 # Modernization log
 
+## Iteration 18 — exercise the oldest installation and the owner handoff
+
+- Run the original v0.1.0 bot and its declared dependencies before the
+  migration in a disposable Linux user service. Exercise the deployed
+  candidate's Telegram dispatcher, preview and confirmation of the official
+  channel. The fixture uses local release input and a fake Telegram transport.
+- Cover owner approval and rollback for a data-only legacy function in the
+  actual Bubblewrap runner, using fixture inputs and a simulated approval.
+- Translate manual Codex operations, device-login notices and local extension
+  controls. Exercise a successful and a rejected device login with test
+  credentials, including session state and private backup permissions.
+- Run 206 local tests with one optional `age` test skipped. Measured line
+  coverage is 29.4% for `bot.py` and 87.8% for `codex_pool.py`.
+
 ## Iteration 17 — protect pooled credentials and recovery
 
 - Reserve a Codex account while reading its quota so a probe and a turn

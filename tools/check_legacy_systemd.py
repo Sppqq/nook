@@ -42,21 +42,24 @@ def stop(*_):
         (home / 'memory/last-write').write_text(version)
     raise SystemExit(0)
 signal.signal(signal.SIGTERM, stop)
-if not is_legacy and sys.argv[1] in ('upgrade', 'button'):
+mode = sys.argv[1]
+if (version == '0.1.0' and mode == 'v010') or (not is_legacy and mode in ('upgrade', 'button', 'v010')):
     import asyncio
     from contextlib import suppress
 
-    from tools.start_guard import recover
-    assert not recover(home)
+    if not is_legacy:
+        from tools.start_guard import recover
+        assert not recover(home)
 
     import bot as nook_bot
     from aiogram.client.session.base import BaseSession
-    from aiogram.methods import DeleteMyCommands, GetMe, GetUpdates, SendMessage
+    from aiogram.methods import AnswerCallbackQuery, DeleteMyCommands, EditMessageText, GetMe, GetUpdates, SendMessage
     from aiogram.types import Message, Update, User
 
     class TestTelegram(BaseSession):
         sent_update = False
         saw_reminder = False
+        channel_update = 0
 
         async def close(self):
             pass
@@ -68,10 +71,27 @@ if not is_legacy and sys.argv[1] in ('upgrade', 'button'):
         async def make_request(self, bot, method, timeout=None):
             if isinstance(method, GetMe):
                 return User(id=123456, is_bot=True, first_name='Fixture', username='fixture_bot')
-            if isinstance(method, DeleteMyCommands):
+            if isinstance(method, (AnswerCallbackQuery, DeleteMyCommands)):
                 return True
             if isinstance(method, GetUpdates):
                 if self.sent_update:
+                    # The fixture authorizes each step after checking that
+                    # migration and channel preview leave legacy mode intact.
+                    go = home.parent / f'allow-channel-{self.channel_update}'
+                    if (mode == 'v010' and not is_legacy and self.channel_update < 2 and go.is_file()):
+                        data = ('mod:update_manager:choose-channel:alpha' if self.channel_update == 0
+                                else self.channel_confirmation)
+                        self.channel_update += 1
+                        return [Update.model_validate({
+                            'update_id': 1 + self.channel_update,
+                            'callback_query': {
+                                'id': str(self.channel_update), 'chat_instance': 'test',
+                                'from': {'id': 77, 'is_bot': False, 'first_name': 'Owner'},
+                                'data': data,
+                                'message': {'message_id': 2, 'date': int(time.time()),
+                                            'chat': {'id': 77, 'type': 'private'}, 'text': 'Nook'},
+                            },
+                        })]
                     await asyncio.sleep(0.25)
                     return []
                 self.sent_update = True
@@ -84,11 +104,17 @@ if not is_legacy and sys.argv[1] in ('upgrade', 'button'):
                     },
                 })]
             if isinstance(method, SendMessage):
-                self.saw_reminder = 'migration-reminder' in method.text
+                self.saw_reminder |= 'migration-reminder' in method.text
+                if self.channel_update == 1:
+                    self.channel_confirmation = method.reply_markup.inline_keyboard[0][0].callback_data
+                    (home.parent / 'channel-preview').write_text(method.text)
                 return Message.model_validate({
                     'message_id': 2, 'date': int(time.time()),
                     'chat': {'id': 77, 'type': 'private'}, 'text': method.text,
                 })
+            if isinstance(method, EditMessageText) and self.channel_update == 2:
+                (home.parent / 'channel-confirmed').write_text(method.text)
+                return True
             raise AssertionError(f'unexpected Telegram method {type(method).__name__}')
 
     session = TestTelegram()
@@ -102,8 +128,20 @@ if not is_legacy and sys.argv[1] in ('upgrade', 'button'):
 
     nook_bot.bot.session = session
     nook_bot.tg = direct_telegram
-    with suppress(KeyboardInterrupt):
-        asyncio.run(nook_bot.main())
+    if mode == 'v010':
+        async def no_host_monitoring():
+            pass
+
+        # Keep the Telegram dispatcher and job loop live, while preventing
+        # the historical bot from inspecting unrelated services on this host.
+        nook_bot.watch_loop = no_host_monitoring
+        nook_bot.ops_loop = no_host_monitoring
+    try:
+        with suppress(KeyboardInterrupt):
+            asyncio.run(nook_bot.main())
+    finally:
+        if is_legacy:
+            (home / 'memory/last-write').write_text(version)
     raise SystemExit(0)
 if not is_legacy:
     import legacy_migration
@@ -273,10 +311,12 @@ def check(base, version, mode, artifact):
     commit = migration.LEGACY_COMMITS[version]
     home, source = stage_legacy(base, version, commit)
     runtime = seed_runtime(home)
-    if mode in ('upgrade', 'button'):
+    if mode in ('upgrade', 'button', 'v010'):
         python = str(home / '.venv/bin/python')
         run(python, '-m', 'ensurepip')
-        packages = ['-r', str(home / 'requirements.txt')] if mode == 'button' else ['colorama==0.4.6']
+        packages = ['-r', str(home / 'requirements.txt')] if mode in ('button', 'v010') else []
+        if mode in ('upgrade', 'v010'):
+            packages.append('colorama==0.4.6')
         run(python, '-m', 'pip', 'install', '--disable-pip-version-check', *packages, timeout=180)
     target = base / 'release'
     target.mkdir()
@@ -294,7 +334,9 @@ def check(base, version, mode, artifact):
     config.mkdir(parents=True, exist_ok=True)
     unit_file = config / unit
     python = home / '.venv/bin/python'
-    unit_contents = (f'[Service]\nWorkingDirectory={home}\n'
+    user_home = base / 'user-home'
+    user_home.mkdir(mode=0o700)
+    unit_contents = (f'[Service]\nWorkingDirectory={home}\nEnvironment="HOME={user_home}"\n'
                      f'ExecStart="{python}" "{service}" {mode}\n')
     unit_file.write_text(unit_contents)
     try:
@@ -304,20 +346,31 @@ def check(base, version, mode, artifact):
         # Wait until SIGTERM handling is installed before exercising cutover.
         run('timeout', '10', 'bash', '-c', 'until test -s "$1"; do sleep .1; done',
             'nook-fixture', str(home / 'memory/started'))
+        if mode == 'v010':
+            # The original bot answered /jobs and updated its UI state.
+            assert json.loads((home / 'state.json').read_text())['view_msgs'] == [2]
+            assert nook_update.update_settings(home)['channel'] is None
         if mode == 'button':
             check_legacy_button(home, source, target, release, unit)
             return
         backup = base / 'backup'
         journal = migration._journal_path(home)
+
+        def stop_service():
+            migration._service_action(unit, 'stop')
+            if mode == 'v010' and not backup.exists():
+                # Capture the old process's final state after it has stopped.
+                runtime['state.json'] = migration._inventory(home)['state.json']
+
         def check_health(root, _version):
             assert_runtime(root, runtime)
             return migration._wait_healthy(root, unit, release['revision'],
-                                           timeout=SUCCESSFUL_START_TIMEOUT if mode == 'upgrade' else 12, stable=2)
+                                           timeout=SUCCESSFUL_START_TIMEOUT if mode in ('upgrade', 'v010') else 12, stable=2)
 
         transaction = lambda: migration.migrate_transaction(
             home, source, target, old_revision=commit, target_revision=release['revision'],
             backup=backup, stage=base / 'stage', journal=journal,
-            stop_service=lambda: migration._service_action(unit, 'stop'),
+            stop_service=stop_service,
             start_service=lambda: migration._service_action(unit, 'start'),
             health_check=check_health,
         )
@@ -373,7 +426,7 @@ def check(base, version, mode, artifact):
         assert json.loads((home / 'MANIFEST.json').read_text())['version'] == expected
         assert_runtime(backup, runtime)
         assert unit_file.read_text() == unit_contents
-        if mode == 'upgrade':
+        if mode in ('upgrade', 'v010'):
             original = json.loads((backup / 'state.json').read_text())
             active = json.loads((home / 'state.json').read_text())
             assert all(active.get(key) == value for key, value in original.items())
@@ -388,6 +441,19 @@ def check(base, version, mode, artifact):
         assert (home / 'memory/last-write').read_text() == version
         assert (backup / 'memory/last-write').read_text() == version
         assert migration._user_service(home) == unit
+        if mode == 'v010':
+            assert nook_update.update_settings(home)['channel'] is None
+            for step, mark, expected_text in (
+                (0, 'channel-preview', 'Alpha'), (1, 'channel-confirmed', 'Alpha'),
+            ):
+                (base / f'allow-channel-{step}').touch()
+                marker = base / mark
+                run('timeout', '20', 'bash', '-c', 'until test -s "$1"; do sleep .1; done',
+                    'nook-fixture', str(marker))
+                assert expected_text in marker.read_text()
+                settings = nook_update.update_settings(home)
+                assert settings['channel'] == (None if step == 0 else 'alpha')
+                assert settings['auto_mode'] == 'off'
         print(f'v{version}: {mode} passed with {unit}', flush=True)
     except BaseException:
         subprocess.run(['journalctl', '--user', '-u', unit, '--no-pager', '-n', '50'],
@@ -501,7 +567,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('artifact', type=Path)
     args = parser.parse_args()
-    for version, mode in (('0.1.0', 'upgrade'), ('0.1.1', 'upgrade'), ('0.1.1', 'rollback'),
+    for version, mode in (('0.1.0', 'v010'), ('0.1.1', 'upgrade'), ('0.1.1', 'rollback'),
                           ('0.1.1', 'offline'), ('0.1.1', 'interrupt'), ('0.1.1', 'button')):
         with tempfile.TemporaryDirectory(prefix='nook-systemd-') as base:
             check(Path(base), version, mode, args.artifact.resolve())

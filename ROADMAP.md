@@ -9,10 +9,11 @@
 
 - The owner can switch the main Telegram menu, interface settings, release
   update screens, Codex quota and pool controls, and quota recovery notices
-  between Russian and English. Complete localization of the remaining
+  between Russian and English. Manual Codex operations and local extension
+  controls also use that preference. Complete localization of the remaining
   Telegram views, operational notifications, and installer.
 
-- Current local line coverage is 25.2% for `bot.py`, 85.7% for the pool,
+- Current local line coverage is 29.4% for `bot.py`, 87.8% for the pool,
   74.7% for the updater and 62.4% for legacy migration. Focus on the queue, Telegram entry points,
   and recovery branches to close the core coverage gap.
 
@@ -24,8 +25,9 @@
   its existing code-only main update. A disposable user-systemd test
   exercises the original menu and worker with the v0.1.1 dependency set,
   startup health, channel preservation and recovery after interruption.
-  The original v0.1.0 needs the signed-release bootstrap because it has no
-  update button.
+  The original v0.1.0 requires the signed-release bootstrap. A second
+  disposable fixture runs its actual bot with its pinned dependencies and
+  checks that switching from main needs a separate Telegram confirmation.
 - Managed installations can adopt a signed compatible release with a new
   dependency set through Telegram. The updater verifies an offline snapshot,
   waits for candidate health, and restores the old code and environment on
@@ -40,7 +42,10 @@
 
 - Iteration 5 implements a separate local extension lifecycle, isolated API v1
   execution, owner policy, versioning, health checks, and automatic rollback.
-  Trusted legacy modules can be pinned by hash without migrating their API.
+  Trusted legacy modules can be pinned by hash. A Bubblewrap fixture covers
+  opt-in migration and rollback of a data-only function. Each legacy module
+  that requires Telegram, host access or delegated actions needs its own
+  wrapper review before switching.
 - Provider session selection now lives outside `bot.py`. Codex failover
   no longer queues a retry after observed tool activity.
 

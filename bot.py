@@ -2999,7 +2999,8 @@ async def do_login(chat):
         return await send(chat, ui_text("Дождись завершения работы пула Codex и повтори вход.",
                                         "Wait for the Codex pool to finish, then try signing in again."))
     if CODEX_LOGIN_LOCK.locked():
-        return await send(chat, "Вход в Codex уже открыт — заверши его по предыдущей ссылке.")
+        return await send(chat, ui_text("Вход в Codex уже открыт — заверши его по предыдущей ссылке.",
+                                            "Codex sign-in is already in progress. Use the previous link to finish."))
     async with CODEX_LOGIN_LOCK:
         # Вход в отдельном каталоге: неудача или отмена не трогает текущий аккаунт.
         auth_home = os.path.expanduser("~/.codex")
@@ -3017,8 +3018,12 @@ async def do_login(chat):
                     async for line in proc.stdout:
                         buf += re.sub(r"\x1b\[[0-9;]*m", "", line.decode(errors="replace"))
                         if not sent and re.search(r"https?://\S+", buf) and re.search(r"\b[A-Z0-9]{4,}-[A-Z0-9]{4,}\b", buf):
-                            sent = await send(chat, f"{E('login')} **Смена аккаунта Codex:**\n\n" + buf.strip()[-1500:]
-                                              + "\n\nОткрой ссылку и войди в нужный аккаунт. До завершения входа текущий аккаунт сохранён.")
+                            title = ui_text("Смена аккаунта Codex", "Switch Codex account")
+                            instructions = ui_text(
+                                "Открой ссылку и войди в нужный аккаунт. До завершения входа текущий аккаунт сохранён.",
+                                "Open the link and sign in to the desired account. Your current login remains active until then.",
+                            )
+                            sent = await send(chat, f"{E('login')} **{title}**\n\n{buf.strip()[-1500:]}\n\n{instructions}")
                 await asyncio.wait_for(reader(), 15 * 60)
                 await proc.wait()
             except asyncio.TimeoutError:
@@ -3031,7 +3036,8 @@ async def do_login(chat):
                     trash(chat, sent, 5)
             new_auth = os.path.join(stage, "auth.json")
             if proc.returncode != 0 or not os.path.isfile(new_auth):
-                return await send(chat, "Не удалось войти в новый аккаунт Codex. Текущий вход сохранён.")
+                return await send(chat, ui_text("Не удалось войти в новый аккаунт Codex. Текущий вход сохранён.",
+                                            "Could not sign in to the new Codex account. Your current login is still active."))
             try:
                 auth = load_json(new_auth, {})
                 if not (auth.get("tokens") or auth.get("OPENAI_API_KEY")):
@@ -3044,11 +3050,13 @@ async def do_login(chat):
                 os.chmod(new_auth, 0o600)
                 os.replace(new_auth, target)
             except (OSError, ValueError):
-                return await send(chat, "Не удалось сохранить новый вход Codex. Предыдущий аккаунт сохранён.")
+                return await send(chat, ui_text("Не удалось сохранить новый вход Codex. Предыдущий аккаунт сохранён.",
+                                            "Could not save the new Codex login. Your previous login is still active."))
             STATE["main_thread"] = None
             STATE["fallback_until"] = 0
             save_state()
-            await send_tmp(chat, "✅ Аккаунт Codex подключён. Следующий разговор начнётся заново. Лимиты можно посмотреть кнопкой «Лимиты».", 120)
+            await send_tmp(chat, ui_text("✅ Аккаунт Codex подключён. Следующий разговор начнётся заново. Лимиты можно посмотреть кнопкой «Лимиты».",
+                                            "✅ Codex account connected. The next conversation starts a new session. Open Usage to check your quotas."), 120)
 
 
 # ---------------------------------------------------------------- голосовые
