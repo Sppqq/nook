@@ -115,7 +115,7 @@
     "tests/test_codex_pool.py": "f7a8a68643843ed5297043c8fbd99b3c330307099e948776b83cc7be720e6bce",
     "tests/test_gemini_process.py": "1f1b63211613dd89260f509e439804723d3e3ea101c5b17d1179b4f749805e4e",
     "tests/test_github_setup.py": "3d1393ec76464e0e7cb454c5d0922d0f076afd712325895d45e55259cda54507",
-    "tests/test_installer.py": "f7123a88d69fc0414ed670f1ee99b87baed5b4d8b19e4834f742b2859b398f68",
+    "tests/test_installer.py": "00d28c659ee76938932b762ad00c073a3aaf1fb614ace30e5bdc5b815d18346a",
     "tests/test_job_scheduler.py": "fcbbda9527b12510330fa5f9a12dc05cc47acab9568432a0aa11db79a6ac0021",
     "tests/test_legacy_migration.py": "b6a5dfa4a4137fa3763dc5f3647aed6f9b7e28941e3d2ed5797e2a9f75f2128b",
     "tests/test_local_extensions.py": "1e19d6ba8744862cadfaa424e32b3e9f0891734edd62076ddae6ceb127a829e9",
