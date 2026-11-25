@@ -1,5 +1,11 @@
 # Modernization log
 
+## Iteration 11 — verify queued Codex recovery
+
+- Exercised the background resume loop with one distant reset and one
+  recovered account. It clears the persisted fallback state and resumes
+  the same thread. The digest reports that work can continue.
+
 ## Iteration 10 — Alpha onboarding and contribution guides
 
 - Updated both READMEs and release operations to use the published Alpha.

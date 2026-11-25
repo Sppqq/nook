@@ -1439,11 +1439,11 @@ async def resume_loop():
                     items, STATE["paused"] = list(q), []
                     save_state()
                     if was_fb:
-                        digest("Лимит Codex сбросился — вернулся на основную модель"
-                               + (f", доделал прерванных задач: {len(items)}" if items else ""))
+                        digest("Квота Codex доступна"
+                               + (f" · к продолжению: {len(items)}" if items else ""))
                     for it in items:
                         lane = user_lane if it["lane"] == "user" else bg_lane
-                        prompt = ("[АВТОПРОДОЛЖЕНИЕ] Лимит Codex сбросился. Продолжи прерванную задачу с того места, "
+                        prompt = ("[АВТОПРОДОЛЖЕНИЕ] Квота Codex снова доступна. Продолжи прерванную задачу с того места, "
                                   "где остановился (проверь, что уже сделано). Если всё готово — коротко отчитайся."
                                   if it.get("thread") else it["prompt"])
                         asyncio.create_task(run_task(lane, prompt, thread_id=it.get("thread"), title=it["title"],

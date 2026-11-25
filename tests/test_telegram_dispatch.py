@@ -8,7 +8,7 @@ import shutil
 import tempfile
 import time
 import unittest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from aiogram.types import CallbackQuery, Update
 
@@ -125,7 +125,10 @@ else:
 
         pool.read_limits = quota
         self.runtime["notify"] = AsyncMock()
-        await self.runtime["pause_for_limit"]({"background": False})
+        await self.runtime["pause_for_limit"]({
+            "lane": "user", "thread": "fixture-thread", "prompt": "continue",
+            "title": "Test turn", "background": False, "header": "",
+        })
         paused = self.runtime["STATE"]["paused"][0]
         self.assertAlmostEqual(paused["reset"] - paused["at"], 60, delta=2)
         message = self.runtime["notify"].await_args.args[0]
@@ -140,6 +143,31 @@ else:
         status = await self.runtime["get_limits"](0)
         self.assertIsNone(status["reached"])
         self.assertLess(status["pool_reset"], time.time() + 2)
+
+        paused["reset"] = time.time() - 1
+        run_task = self.runtime["run_task"] = AsyncMock()
+        digest = self.runtime["digest"] = Mock()
+        completed = asyncio.Event()
+
+        async def sleep(delay):
+            if delay == 60:
+                completed.set()
+                await asyncio.Future()
+
+        with patch.object(self.runtime["asyncio"], "sleep", new=sleep):
+            loop = asyncio.create_task(self.runtime["resume_loop"]())
+            try:
+                await asyncio.wait_for(completed.wait(), 2)
+            finally:
+                loop.cancel()
+                with self.assertRaises(asyncio.CancelledError):
+                    await loop
+        run_task.assert_awaited_once()
+        self.assertEqual(run_task.await_args.kwargs["thread_id"], "fixture-thread")
+        self.assertTrue(run_task.await_args.kwargs["resumed"])
+        self.assertEqual(self.runtime["STATE"]["paused"], [])
+        self.assertEqual(self.runtime["STATE"]["fallback_until"], 0)
+        self.assertIn("к продолжению: 1", digest.call_args.args[0])
 
     async def test_pool_pauses_only_on_recognized_quota_error(self):
         from test_codex_pool import fake_accounts
