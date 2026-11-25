@@ -32,11 +32,16 @@
 
 Автоматический перезапуск поддерживает установку через пользовательскую `nook.service`. PM2, контейнеры, вручную запущенные боты и исходный частный Домовой требуют отдельной адаптации. Нельзя подменять их публичным Nook поверх неизвестной структуры.
 
-### Если установлено до появления обновлятора
+### Переход со старых версий
 
-Для публичных установок на точных версиях `v0.1.0` и `v0.1.1` есть
-переход из SSH. В `v0.1.0` нет кнопки обновления, а установленная кнопка
-`v0.1.1` умеет обновлять только код без смены зависимостей.
+В `v0.1.1` можно воспользоваться кнопкой **Ещё → Моды → Обновить Nook**,
+когда совместимая версия появится в `main`. Старая кнопка обновляет код при
+совпадающих зависимостях. После проверки запуска Nook сохраняет режим
+`main`. Канал официальных релизов выбирает владелец в настройках обновлений.
+
+Для `v0.1.0`, где кнопки ещё нет, и для перехода со сменой зависимостей
+используй миграцию из SSH. Она поддерживает точные публичные версии
+`v0.1.0` и `v0.1.1`.
 
 На Linux под владельцем пользовательской службы дождись завершения задач и
 отмени запросы старого обновлятора. Из каталога вне инстанса запусти
@@ -110,12 +115,11 @@ systemctl --user start nook.service
 
 `apply-offline <id> --yes` — отдельный режим для администратора при остановленном боте; он не запускает службу и не проверяет её здоровье. Последующие местные правки блокируют откат, чтобы не потерять их. Резервные копии автоматически не удаляются.
 
-Новая `nook.service` проверяет журнал перед запуском бота. После прерывания
-обновления она запускает сохранённую копию обновлятора и восстанавливает
-предыдущий код. Существующие unit-файлы не переписываются. При первой
-миграции со старого обновлятора или если изменены файлы журнала, используй
-офлайн-откат и проверенный архив. Ошибку, которая проявилась после окна
-проверки, можно откатить отдельно.
+При запуске Nook проверяет журнал и восстанавливает предыдущий код после
+обрыва обновления. Для первого перехода через кнопку `v0.1.1` поддерживается
+сохранённый обновлятор этой версии. Существующие unit-файлы сохраняются.
+Если повреждён журнал или ошибка проявилась после проверки запуска,
+воспользуйся офлайн-откатом и проверенным архивом.
 
 ## English
 
@@ -138,7 +142,15 @@ updater after an interrupted transaction. Existing unit files stay intact.
 Automatic updates are off by default. An owner can choose notification,
 confirmation or unattended upgrade. Downgrades always require approval.
 
-Automatic service updates support the installer's user `nook.service`; PM2, containers, manual launches and the original private Domovoy need separate adaptation. Older Nook installations without the updater require a reviewed initial migration. Do not establish a clean baseline from arbitrary local files to bypass conflicts; older raw manifests cannot identify all rendered files as unchanged.
+Automatic service updates support the installer's user `nook.service`. PM2,
+containers, manual launches and the original private Domovoy need separate
+adaptation.
+
+Once compatible code reaches `main`, v0.1.1 can use its existing Telegram
+update button if dependencies match. Nook keeps using `main` until the
+owner selects a release channel. For v0.1.0 or dependency changes, use
+the signed-release SSH migration described above. Keep the original
+installed hashes so migration can identify local edits.
 
 From the installed directory, use `bin/nook-update check`, then `bin/nook-update request <id> --yes`, and `bin/nook-update status`. Stop the service and external writers for an offline instance snapshot. Online backup from Telegram reserves the agent lanes, uses SQLite's Backup API, and fails if other captured files change. External provider data is opt-in via `--include-providers` and restores under `provider-home/`. Use age recipient and identity options to encrypt and verify backups, `--keep N` to rotate after verification, and the `--max-*` options to support larger instances. For manual recovery, stop `nook.service`, run `bin/nook-update rollback-offline --yes`, and start it again. `apply-offline <id> --yes` is for administrators with a stopped bot and does not perform startup health checks. Rollback refuses to overwrite edits made after the update.
 

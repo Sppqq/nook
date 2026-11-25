@@ -1,5 +1,12 @@
 # Modernization log
 
+## Iteration 8 — existing Telegram updater
+
+- Reused the frozen v0.1.1 worker for first adoption from main. The startup
+  guard joins the original health check or restores an interrupted update.
+- Verified the exact tag and new artifact with a disposable user systemd
+  service. Fixed installer checks in linked Git worktrees.
+
 ## Iteration 7 — Codex account pool
 
 - Started from main after #7 and #8 merged. Ported opt-in quota routing,

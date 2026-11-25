@@ -2,6 +2,14 @@
 
 ## Current work
 
+- PR #9 continues the work integrated into main by #7 and #8.
+- The original v0.1.1 Telegram updater can adopt the candidate through
+  its existing code-only main update. A disposable user-systemd test
+  exercises the original worker, startup health, channel preservation and
+  recovery after interruption. Changing dependency sets or migrating
+  v0.1.0 still uses the signed-release bootstrap.
+- An attested v0.1.2-alpha.1 is published. Beta, RC and Stable gates remain.
+
 - Ported opt-in Codex routing to the public release tree. The disposable
   fixture checks the Telegram owner gate, least-quota selection and CLI
   resume. Test managed-account token refresh and recovery on a spare host.
@@ -192,9 +200,9 @@
 - The legacy SSH bootstrap handles exact `v0.1.0` and `v0.1.1`
   installations with an attested target release. Linux CI checks both trees
   with a disposable user systemd service and a local candidate artifact.
-  Published-artifact and live Telegram/provider tests still require a release
-  and a disposable bot. The historical Telegram install paths need a bridge
-  deployed outside these immutable tags.
+  Verify the published artifact with a disposable live bot. v0.1.0 needs
+  an initial bootstrap because its immutable source has no Telegram updater.
+  Dependency-changing updates from Telegram still require a migration path.
 - Raise measured meaningful coverage from 41% overall / 19% `bot.py` toward
   50% / 30%; prioritize direct bot lifecycle and security boundary behavior.
 - Add bounded protocol version/capability negotiation and revocation tests

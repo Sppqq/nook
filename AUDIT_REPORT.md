@@ -10,7 +10,19 @@
 - The fixture exercises actual Nook dispatch and Codex CLI protocol via local
   subprocesses. A live multi-account soak and independent audit remain open.
 
-## Current findings
+## Current update audit
+
+- The exact published v0.1.1 worker has no `_recover` command. The startup
+  guard recognizes it by SHA-256, uses its existing locks and allows the new
+  bot to report health while the historical supervisor is active. If the
+  supervisor was interrupted, the guard restores the old source under both
+  locks. The compatibility code executes only the digest-matched bytes.
+- Verified the original worker in a disposable Linux user systemd service
+  with simulated Telegram transport. The test covers code adoption with
+  the same dependencies, preservation of local data and the main channel,
+  and rollback of an interrupted transaction.
+
+## Earlier findings
 
 - Iteration 5 introduces staged local extensions. Draft code never loads into
   the Telegram process. Linux namespace isolation, explicit owner approvals,

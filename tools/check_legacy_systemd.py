@@ -1,5 +1,6 @@
 """Exercise both historical source trees against a disposable user systemd unit."""
 import argparse
+from importlib.util import module_from_spec, spec_from_file_location
 import json
 import os
 from hashlib import sha256
@@ -35,9 +36,12 @@ def stop(*_):
         (home / 'memory/last-write').write_text(version)
     raise SystemExit(0)
 signal.signal(signal.SIGTERM, stop)
-if not is_legacy and sys.argv[1] == 'upgrade':
+if not is_legacy and sys.argv[1] in ('upgrade', 'button'):
     import asyncio
     from contextlib import suppress
+
+    from tools.start_guard import recover
+    assert not recover(home)
 
     import bot as nook_bot
     from aiogram.client.session.base import BaseSession
@@ -178,6 +182,55 @@ def stage_legacy(base, version, commit):
     return home, source
 
 
+def check_legacy_button(home, source, target, release, service):
+    """Run the published v0.1.1 Telegram updater against an isolated service."""
+    spec = spec_from_file_location('nook_v011_fixture', source / 'nook_update.py')
+    old = module_from_spec(spec)
+    spec.loader.exec_module(old)
+    from tools.start_guard import recover
+
+    revision = release['revision']
+    state = home / 'state.json'
+    original = json.loads(state.read_text())
+    local_mod = (home / 'mods/owner_custom.py').read_bytes()
+    settings_path = nook_update.workspace(home) / 'settings.json'
+    service_systemctl = old.systemctl
+    systemctl = lambda *args, **kwargs: service_systemctl(
+        *(service if arg == 'nook.service' else arg for arg in args), **kwargs)
+    health = old.healthy
+    stage = old.workspace(home) / 'staged' / '0123456789abcdef'
+    old.plan_source(home, target, revision, stage)
+    old.atomic(stage / 'worker.py', (source / 'nook_update.py').read_bytes())
+    assert old.request(home, stage.name)
+    with (patch.object(old, 'systemctl', systemctl),
+          patch.object(old, 'healthy', lambda *args: health(*args, timeout=30, stable=2)),
+          patch.object(old, 'notify') as notify):
+        old.worker(home, stage.name, old.service_matches(home))
+        notify.assert_called_once()
+    assert old.read_json(old.workspace(home) / 'transaction.json')['status'] == 'success'
+    assert settings_path.is_file() is False
+    assert nook_update.update_settings(home)['channel'] is None
+    assert not (home / 'VERSION').exists()  # This was outside the old source allowlist.
+    assert (home / 'mods/owner_custom.py').read_bytes() == local_mod
+    run('timeout', '10', 'bash', '-c', 'until [[ "$(cat "$1")" == "$2" ]]; do sleep .1; done',
+        'nook-fixture', str(home / 'memory/started'), release['version'])
+    current = json.loads(state.read_text())
+    assert all(current.get(key) == value for key, value in original.items())
+    migration._service_action(service, 'stop')
+    old.restore(home)
+
+    # Simulate the old supervisor disappearing during cutover. The new
+    # startup guard must restore the old code instead of invoking _recover.
+    old.plan_source(home, target, revision, stage.with_name('0123456789abcdee'))
+    stage = stage.with_name('0123456789abcdee')
+    old.atomic(stage / 'worker.py', (source / 'nook_update.py').read_bytes())
+    old.apply_files(home, stage.name)
+    assert recover(home)
+    assert not recover(home)
+    assert (home / 'MANIFEST.json').read_bytes() == (source / 'MANIFEST.json').read_bytes()
+    print(f'v0.1.1: original Telegram worker and interrupted rollback passed with {service}', flush=True)
+
+
 def check(base, version, mode, artifact):
     commit = migration.LEGACY_COMMITS[version]
     home, source = stage_legacy(base, version, commit)
@@ -201,8 +254,9 @@ def check(base, version, mode, artifact):
     config = Path.home() / '.config/systemd/user'
     config.mkdir(parents=True, exist_ok=True)
     unit_file = config / unit
+    python = sys.executable if mode == 'button' else home / '.venv/bin/python'
     unit_contents = (f'[Service]\nWorkingDirectory={home}\n'
-                     f'ExecStart="{home / ".venv/bin/python"}" "{service}" {mode}\n')
+                     f'ExecStart="{python}" "{service}" {mode}\n')
     unit_file.write_text(unit_contents)
     try:
         run('systemctl', '--user', 'daemon-reload')
@@ -211,6 +265,9 @@ def check(base, version, mode, artifact):
         # Wait until SIGTERM handling is installed before exercising cutover.
         run('timeout', '10', 'bash', '-c', 'until test -s "$1"; do sleep .1; done',
             'nook-fixture', str(home / 'memory/started'))
+        if mode == 'button':
+            check_legacy_button(home, source, target, release, unit)
+            return
         backup = base / 'backup'
         journal = migration._journal_path(home)
         def check_health(root, _version):
@@ -308,7 +365,7 @@ def main():
     parser.add_argument('artifact', type=Path)
     args = parser.parse_args()
     for version, mode in (('0.1.0', 'upgrade'), ('0.1.1', 'upgrade'), ('0.1.1', 'rollback'),
-                          ('0.1.1', 'offline'), ('0.1.1', 'interrupt')):
+                          ('0.1.1', 'offline'), ('0.1.1', 'interrupt'), ('0.1.1', 'button')):
         with tempfile.TemporaryDirectory(prefix='nook-systemd-') as base:
             check(Path(base), version, mode, args.artifact.resolve())
 

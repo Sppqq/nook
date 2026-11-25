@@ -25,6 +25,7 @@ class InstallerTests(unittest.TestCase):
   (source/'memory/notes.md').write_text('private memory')
   (source/'config.json').write_text('private config')
   (source/'.env').write_text('private environment')
+  (source/'.git').write_text('gitdir: /path/to/repository/worktrees/example\n')
   (source/'.codex').mkdir()
   (source/'.codex/auth.json').write_text('private provider session')
   with patch.object(m,'SOURCE',source):
@@ -34,6 +35,7 @@ class InstallerTests(unittest.TestCase):
   self.assertFalse((target/'memory/notes.md').exists())
   self.assertFalse((target/'config.json').exists())
   self.assertFalse((target/'.env').exists())
+  self.assertFalse((target/'.git').exists())
   self.assertFalse((target/'.codex/auth.json').exists())
   self.assertTrue((target/'mods/custom.py').is_file())
  def test_manifest_version_must_match_canonical_version(self):
