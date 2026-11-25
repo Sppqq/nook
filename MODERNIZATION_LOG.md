@@ -7,7 +7,11 @@
   approval before polling or scheduling work. A Telegram startup failure
   leaves the candidate unapproved and starts no work.
 - Assign a distinct Nightly version and render release notes that describe
-  signed dependency upgrades. The published Alpha remains available.
+  signed dependency upgrades. The installer test now runs on the candidate's
+  own channel. The published Alpha remains available.
+- Give successful cold starts time to report health in the disposable
+  systemd exercise. A busy runner exceeded the earlier test-only deadline
+  and the fixture reverted to its old service as intended.
 
 ## Iteration 12 — switch dependencies in a signed update
 

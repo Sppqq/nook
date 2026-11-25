@@ -6,9 +6,19 @@ Review the signed release path, the legacy updater's restore points, the
 isolated extension broker and policy ownership, and pooled credential and
 session handling. Reproduce the upgrade and rollback with disposable
 accounts and include a long run on a separate VPS. The results below are
-maintainer checks. The 189-test local coverage run (one optional `age`
-test skipped) covered 24% of lines in `bot.py`, 86% in `codex_pool.py`,
-and 61% in `legacy_migration.py`. The 90% core target remains open.
+maintainer checks. The Nightly local run passed 196 tests with one optional
+`age` test skipped. Line coverage was 25.2% in `bot.py`, 85.7% in
+`codex_pool.py`, 74.7% in `nook_update.py`, and 62.4% in
+`legacy_migration.py`. The 90% core target remains open.
+
+The local queue benchmark processed 27,136 synthetic jobs in 122 seconds.
+It ran on a shared Linux host with disposable data and no provider requests.
+Long-running VPS validation with actual Telegram and Codex remains open.
+
+GitHub reports required Python 3.11 and 3.12 checks for `main`. The
+`release-prerelease` environment is visible. The maintainer's write-level
+account could not verify a `release-stable` environment or tag protections.
+Verify these settings with repository-admin access before promotion.
 
 ## Current Codex pool audit
 

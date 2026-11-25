@@ -2,8 +2,8 @@
 
 ## Current work
 
-- Current local line coverage is 24% for `bot.py`, 86% for the pool and
-  61% for legacy migration. Focus on the queue, Telegram entry points,
+- Current local line coverage is 25.2% for `bot.py`, 85.7% for the pool,
+  74.7% for the updater and 62.4% for legacy migration. Focus on the queue, Telegram entry points,
   and recovery branches to close the core coverage gap.
 
 - The pool checks unknown quota again before distant account resets and

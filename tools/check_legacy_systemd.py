@@ -19,6 +19,9 @@ import legacy_migration as migration
 import nook_update
 
 ROOT = Path(__file__).resolve().parents[1]
+# A successful cold start may take longer on a busy test runner. Keep the
+# intentional failed-health case short and leave the production limits intact.
+SUCCESSFUL_START_TIMEOUT = 75
 SERVICE = """\
 import json
 from pathlib import Path
@@ -203,7 +206,7 @@ def check_legacy_button(home, source, target, release, service):
     old.atomic(stage / 'worker.py', (source / 'nook_update.py').read_bytes())
     assert old.request(home, stage.name)
     with (patch.object(old, 'systemctl', systemctl),
-          patch.object(old, 'healthy', lambda *args: health(*args, timeout=30, stable=2)),
+          patch.object(old, 'healthy', lambda *args: health(*args, timeout=SUCCESSFUL_START_TIMEOUT, stable=2)),
           patch.object(old, 'notify') as notify):
         old.worker(home, stage.name, old.service_matches(home))
         notify.assert_called_once()
@@ -273,7 +276,7 @@ def check(base, version, mode, artifact):
         def check_health(root, _version):
             assert_runtime(root, runtime)
             return migration._wait_healthy(root, unit, release['revision'],
-                                           timeout=25 if mode == 'upgrade' else 12, stable=2)
+                                           timeout=SUCCESSFUL_START_TIMEOUT if mode == 'upgrade' else 12, stable=2)
 
         transaction = lambda: migration.migrate_transaction(
             home, source, target, old_revision=commit, target_revision=release['revision'],
@@ -432,7 +435,7 @@ while True:
         started = home / 'memory/started'
         run('timeout', '10', 'bash', '-c', 'until test -s "$1"; do sleep .1; done', 'fixture', str(started))
         with (patch.object(nook_update, 'systemctl', fixture_systemctl),
-              patch.object(nook_update, 'healthy', lambda *args: health(*args, timeout=25, stable=2)),
+              patch.object(nook_update, 'healthy', lambda *args: health(*args, timeout=SUCCESSFUL_START_TIMEOUT, stable=2)),
               patch.object(nook_update, 'notify') as notify):
             nook_update.worker(home, ident, nook_update.service_matches(home))
             notify.assert_called_once()
