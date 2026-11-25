@@ -128,7 +128,7 @@
     "tests/test_release_notes.py": "042bfe42baf2b8f64647d61de4ca3a911b003b74ab3174bd3a48cfa3e38f4c53",
     "tests/test_root_claim.py": "9f02006b8f60628d7d89db96909736d411893fd0b9ae16ef8717b21e08b32714",
     "tests/test_security.py": "ca3f04cf2ef3e003ded6b700daf5e846034b553990b0df5cb4958aa9c2d8baac",
-    "tests/test_telegram_dispatch.py": "43519fd961e0abea3cb6598884eb69cca5e1197e82c4e4e3557b629a535c5347",
+    "tests/test_telegram_dispatch.py": "d4d07fe6420a2bfe86fbf098d353ed45a075c50c3238627f2303db0e0da0e010",
     "tests/test_tool_executor.py": "5092bda43bb5fda88a0c16d6caaa52bba237edff1b5af06ec8396a53ac0c8fb0",
     "tests/test_ui_settings.py": "66d5bc2f13e962080e9f00e7991e773394df74ed4e2a913ab07f8cf2053495ac",
     "tests/test_update_manager.py": "942e149be91ead9275caaeac3e5ad5886fe5adb0f4952ee031736f2fc604e4a1",

@@ -433,6 +433,7 @@ else:
         runtime['waiting'] = lambda *args: nullcontext()
         runtime['model_quota_status'] = AsyncMock(return_value=('', ''))
         runtime['codex_default'] = lambda key: None
+        runtime['mercury_key'] = Mock(return_value=None)
         runtime['collect'] = AsyncMock(return_value=({}, {}))
         queue = self.home / 'spool/jobs.json'
         job_scheduler.write(queue, [{'id': 'task', 'at': 1700000000, 'every': 3600, 'prompt': 'Custom reminder'}])
@@ -453,6 +454,9 @@ else:
             self.assertIn(line, runtime['post'].await_args.args[1])
         runtime['CFG']['model'] = 'gpt-6.1-sol'
         runtime['STATE']['fallback_until'] = time.time() + 60
+        await self.dispatch('model')
+        self.assertNotIn('Codex quota is exhausted', runtime['post'].await_args.args[1])
+        runtime['mercury_key'].return_value = 'fixture-only'
         await self.dispatch('model')
         self.assertIn('Codex quota is exhausted', runtime['post'].await_args.args[1])
         await self.dispatch('m:mercury-3')
