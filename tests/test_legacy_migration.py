@@ -1,5 +1,8 @@
 """Compatibility-planner tests; never activate a copy or contact a provider."""
+import ctypes
 import hashlib
+
+import nook_update
 import json
 from pathlib import Path
 import sys
@@ -75,6 +78,25 @@ class LegacyMigrationPlannerTests(unittest.TestCase):
         self.assertEqual(profile.version, '0.1.1')
         self.assertEqual(profile.updater, 'telegram')
 
+    def test_real_v011_installer_baseline_accepted_without_rebasing_edits(self):
+        files = dict(self.old_files, **{'mods/self_update.py': 'def setup(mod): pass\n'})
+        self._source(self.old, files, '0.1.1', legacy=True)
+        self._copy_files(files, self.home)
+        manifest = self.old / 'MANIFEST.json'
+        (self.home / manifest.name).write_bytes(manifest.read_bytes())
+        baseline = {name: nook_update.digest((self.home / name).read_bytes())
+                    for name in set(files) | {manifest.name}}
+        state = self.home / nook_update.STATE
+        state.write_text(json.dumps({'schema': 1, 'revision': 'installed', 'files': baseline}))
+        plan = migration.plan_source_migration(
+            self.home, self.old, self.new, old_revision=migration.LEGACY_COMMITS['0.1.1'])
+        self.assertTrue(plan['dependency_change_required'])
+        baseline['bot.py'] = 'b' * 64
+        state.write_text(json.dumps({'schema': 1, 'revision': 'installed', 'files': baseline}))
+        with self.assertRaisesRegex(migration.MigrationError, 'Эталон'):
+            migration.plan_source_migration(
+                self.home, self.old, self.new, old_revision=migration.LEGACY_COMMITS['0.1.1'])
+
     def test_plan_updates_code_and_dependencies_without_touching_runtime(self):
         plan = migration.plan_source_migration(
             self.home, self.old, self.new, old_revision=migration.LEGACY_COMMITS['0.1.0'])
@@ -139,6 +161,7 @@ class LegacyMigrationPlannerTests(unittest.TestCase):
         self.assertEqual((stage / '.codex/auth.json').read_text(), '{"session":"local"}')
         self.assertTrue((stage / 'mods/custom.py').is_file())
 
+    @unittest.skipUnless(hasattr(ctypes.CDLL(None), 'renameat2'), 'Linux directory exchange required')
     def test_atomic_directory_exchange_and_rollback(self):
         live = self.root / 'live'
         stage = self.root / 'live.stage'
@@ -169,6 +192,7 @@ class LegacyMigrationPlannerTests(unittest.TestCase):
         self.assertTrue((stage / '.venv/bin/python').is_file())
         self.assertFalse((self.home / '.venv').exists())
 
+    @unittest.skipUnless(sys.platform == 'linux', 'Linux migration required')
     def test_failed_health_check_restores_the_complete_old_tree(self):
         self.target_files['requirements.txt'] = '# empty fixture\n'
         self._source(self.new, self.target_files, '0.1.2-alpha.1', legacy=False)
@@ -195,6 +219,7 @@ class LegacyMigrationPlannerTests(unittest.TestCase):
         self.assertTrue(backup.is_dir())
         self.assertEqual(service, ['stop', 'start', 'stop', 'start'])
 
+    @unittest.skipUnless(sys.platform == 'linux', 'Linux migration required')
     def test_recovery_handles_power_loss_after_atomic_switch_before_journal_write(self):
         self.target_files['requirements.txt'] = '# empty fixture\n'
         self._source(self.new, self.target_files, '0.1.2-alpha.1', legacy=False)
@@ -228,7 +253,8 @@ class LegacyMigrationPlannerTests(unittest.TestCase):
         self.assertEqual((self.home / 'bot.py').read_text(), self.old_files['bot.py'])
         self.assertEqual((self.home / '.codex/auth.json').read_text(), '{"session":"local"}')
 
-    def test_runtime_change_during_staging_aborts_before_switch(self):
+    @unittest.skipUnless(sys.platform == 'linux', 'Linux migration required')
+    def test_final_runtime_write_on_service_stop_is_preserved(self):
         self.target_files['requirements.txt'] = '# empty fixture\n'
         self._source(self.new, self.target_files, '0.1.2-alpha.1', legacy=False)
         (self.root / 'MIGRATION_SOURCE.json').write_text(json.dumps({
@@ -241,7 +267,12 @@ class LegacyMigrationPlannerTests(unittest.TestCase):
             (self.home / 'state.json').write_text('{"identity":"latest"}')
 
         journal = self.root / 'migration.json'
-        with self.assertRaisesRegex(migration.MigrationError, 'Данные изменились'):
+        with patch.object(migration, 'build_staged_environment') as build:
+            def build_fixture(_home, build_root, _target, **kwargs):
+                scripts = build_root / '.venv/bin'
+                scripts.mkdir(parents=True)
+                (scripts / 'test-command').write_text(f'#!{scripts}/python\n')
+            build.side_effect = build_fixture
             migration.migrate_transaction(
                 self.home, self.old, self.new,
                 old_revision=migration.LEGACY_COMMITS['0.1.0'], target_revision='b' * 40,
@@ -249,9 +280,13 @@ class LegacyMigrationPlannerTests(unittest.TestCase):
                 journal=journal, stop_service=stop_and_mutate,
                 start_service=lambda: service.append('start'),
                 health_check=lambda *_: True, python=sys.executable)
-        self.assertEqual((self.home / 'bot.py').read_text(), self.old_files['bot.py'])
-        self.assertEqual((self.home / 'state.json').read_text(), '{"identity":"latest"}')
-        self.assertEqual(json.loads(journal.read_text())['status'], 'rolled_back')
+        self.assertEqual((self.home / 'bot.py').read_text(), self.target_files['bot.py'])
+        expected = '{"identity":"latest"}'
+        self.assertEqual((self.home / 'state.json').read_text(), expected)
+        self.assertEqual((self.root / 'home.backup/state.json').read_text(), expected)
+        self.assertEqual((self.home / '.venv/bin/test-command').read_text(),
+                         f'#!{self.home}/.venv/bin/python\n')
+        self.assertEqual(json.loads(journal.read_text())['status'], 'complete')
         self.assertEqual(service, ['stop', 'start'])
 
 

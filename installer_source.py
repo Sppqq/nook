@@ -71,7 +71,30 @@ def install_from_source(argv, *, channel=None, version=None, yes=False, dev=Fals
         raise SystemExit(str(error)) from None
 
 
+def migrate_from_release(home, version):
+    from nook_update import UpdateError, fetch_release_source, list_releases
+
+    try:
+        release = published(list_releases(), channel_for_version(version), version)
+        with tempfile.TemporaryDirectory(prefix='nook-migrate-') as stage:
+            source, _ = fetch_release_source(release, Path(stage))
+            supervisor = source / 'legacy_migration.py'
+            if not supervisor.is_file():
+                raise ValueError('В этом релизе нет переходного обновлятора Nook.')
+            return subprocess.run([sys.executable, str(supervisor), 'migrate',
+                                   '--home', home, '--target-version', version]).returncode
+    except (OSError, EOFError, ValueError, UpdateError) as error:
+        raise SystemExit(str(error)) from None
+
+
 def main():
+    if sys.argv[1:2] == ['--migrate']:
+        parser = argparse.ArgumentParser(prog='bootstrap.sh --migrate', allow_abbrev=False)
+        parser.add_argument('--home', required=True)
+        parser.add_argument('--version', required=True)
+        parser.add_argument('--yes', action='store_true', required=True)
+        args = parser.parse_args(sys.argv[2:])
+        sys.exit(migrate_from_release(args.home, args.version))
     parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
     parser.add_argument('--channel', choices=CHANNELS)
     parser.add_argument('--version')

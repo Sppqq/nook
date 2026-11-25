@@ -1,7 +1,9 @@
 """Fail-closed source planner for the two published pre-channel Nook installs."""
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 import ctypes
 import errno
+import fcntl
 import hashlib
 import json
 import os
@@ -192,7 +194,7 @@ def plan_source_migration(home, old_source, target_source, *, old_revision):
     for name in sorted(old_names | new_names | {'MANIFEST.json'}):
         old_path = old_source / name
         new_path = target_source / name
-        live = home / name
+        live = _safe_target(home, name)
         old_exists = name == 'MANIFEST.json' or name in old_names
         new_exists = name == 'MANIFEST.json' or name in new_names
         old_data = nook_update.rendered(old_path.read_bytes(), home) if old_exists else None
@@ -224,6 +226,13 @@ def plan_source_migration(home, old_source, target_source, *, old_revision):
     if conflicts:
         raise MigrationError('Сохранены локальные файлы; миграция остановлена из-за конфликтов: '
                              + ', '.join(conflicts[:20]))
+    baseline = nook_update.path_at(home, nook_update.STATE)
+    if baseline.exists():
+        expected = {name: nook_update.digest(nook_update.rendered(
+            (old_source / name).read_bytes(), home)) for name in old_names | {'MANIFEST.json'}}
+        if (profile.version != '0.1.1'
+                or _read_json(baseline) != {'schema': 1, 'revision': 'installed', 'files': expected}):
+            raise MigrationError('Эталон установщика не соответствует исходной версии Nook.')
     dependencies = any(
         (old_source / name).read_bytes() != (target_source / name).read_bytes()
         for name in ('requirements.txt', 'requirements-voice.txt')
@@ -242,9 +251,15 @@ def plan_source_migration(home, old_source, target_source, *, old_revision):
 
 
 def _inventory(root):
-    result = {}
+    if root.is_symlink() or not root.is_dir():
+        raise MigrationError('Ожидался обычный каталог установки.')
+    result = {'.': {'kind': 'dir', 'mode': stat.S_IMODE(root.stat().st_mode)}}
     total = 0
-    for base, dirs, names in os.walk(root, topdown=True, followlinks=False):
+
+    def fail_walk(error):
+        raise error
+
+    for base, dirs, names in os.walk(root, followlinks=False, onerror=fail_walk):
         parent = Path(base)
         dirs.sort()
         names.sort()
@@ -308,7 +323,7 @@ def create_snapshot(home, destination, *, min_free_bytes=0):
         raise
 
 
-def stage_source_tree(home, target_source, plan, stage):
+def stage_source_tree(home, target_source, plan, stage, *, snapshot=None):
     """Prepare a complete side-by-side installation; leaves live files untouched."""
     home, target_source, stage = Path(home), Path(target_source), Path(stage)
     if stage.exists() or stage.is_symlink() or stage.parent.resolve() != home.parent.resolve():
@@ -318,12 +333,18 @@ def stage_source_tree(home, target_source, plan, stage):
     if plan.get('target_version') != _source_manifest(target_source)['version']:
         raise MigrationError('Целевой источник изменился после построения плана.')
     for name, item in plan['changes'].items():
-        live = home / name
+        live = _safe_target(home, name)
         current = live.read_bytes() if live.is_file() and not live.is_symlink() else None
         if current != item['before']:
             raise MigrationError('Файл изменился после проверки плана: ' + name)
     try:
-        shutil.copytree(home, stage, symlinks=True, copy_function=shutil.copy2)
+        source = Path(snapshot) if snapshot is not None else home
+
+        def exclude_old_venv(directory, names):
+            return {'.venv'} if Path(directory) == source and '.venv' in names else set()
+
+        shutil.copytree(source, stage, symlinks=True, copy_function=shutil.copy2,
+                        ignore=exclude_old_venv if snapshot is not None else None)
         for name, item in plan['changes'].items():
             target = _safe_target(stage, name)
             after = item['after']
@@ -331,11 +352,7 @@ def stage_source_tree(home, target_source, plan, stage):
                 if target.exists():
                     target.unlink()
                 continue
-            target.parent.mkdir(parents=True, exist_ok=True)
-            temporary = target.with_name('.' + target.name + '.migration-tmp')
-            temporary.write_bytes(after)
-            os.chmod(temporary, item['mode'])
-            os.replace(temporary, target)
+            nook_update.atomic(target, after, item['mode'])
         marker = _safe_target(stage, 'spool/migrations/legacy-source-plan.json')
         if marker.exists():
             raise MigrationError('В staging уже существует файл плана миграции.')
@@ -347,8 +364,7 @@ def stage_source_tree(home, target_source, plan, stage):
             'target_version': plan['target_version'], 'state': 'staged',
             'dependency_change_required': bool(plan['dependency_change_required']),
         }
-        marker.write_text(json.dumps(record, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
-        os.chmod(marker, 0o600)
+        nook_update.json_write(marker, record)
         return record
     except Exception:
         if stage.exists():
@@ -544,26 +560,46 @@ def exchange_directories(left, right):
 
 
 def _write_journal(path, value):
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(path.name + '.tmp')
-    if temporary.is_symlink():
-        raise MigrationError('Небезопасная ссылка вместо временного журнала.')
-    data = (json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2) + '\n').encode()
-    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, 'O_NOFOLLOW', 0), 0o600)
+    if path.is_symlink():
+        raise MigrationError('Небезопасная ссылка вместо журнала миграции.')
+    nook_update.json_write(path, value)
+
+
+def _sync_trees(path):
+    # The stage, backup and journal are on one filesystem. Flush copied
+    # files and directory entries before making the exchange recoverable.
+    syncfs = getattr(ctypes.CDLL(None, use_errno=True), 'syncfs', None)
+    if syncfs is None:
+        raise MigrationError('ОС не поддерживает синхронизацию файловой системы Linux.')
+    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
     try:
-        with os.fdopen(fd, 'wb') as stream:
-            stream.write(data)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, path)
-        directory_fd = os.open(path.parent, os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0))
-        try:
-            os.fsync(directory_fd)
-        finally:
-            os.close(directory_fd)
+        if syncfs(fd):
+            code = ctypes.get_errno()
+            raise OSError(code, os.strerror(code))
     finally:
-        temporary.unlink(missing_ok=True)
+        os.close(fd)
+
+
+def _relocate_venv(venv, final):
+    # pip generates console scripts and activation files with absolute paths.
+    # Leave binaries and symlinks alone. Replace both ordinary shebangs and
+    # pip's shell wrapper used for paths containing spaces.
+    old, new = os.fsencode(venv), os.fsencode(final)
+    for path in (venv / 'bin').iterdir():
+        if path.is_symlink() or not path.is_file():
+            continue
+        data = path.read_bytes()
+        if (data.startswith(b'#!') or path.name.startswith('activate') or path.name == 'Activate.ps1') and old in data:
+            path.write_bytes(data.replace(old, new))
+
+
+def _check_legacy_queue(home):
+    workspace = nook_update.path_at(home, 'spool/updates')
+    request = nook_update.path_at(workspace, 'request.json')
+    transaction = nook_update.path_at(workspace, 'transaction.json')
+    if (request.exists() or transaction.exists()
+            and nook_update.read_json(transaction).get('status') not in ('success', 'rolled_back')):
+        raise MigrationError('Сначала заверши или отмени прежнее обновление Nook.')
 
 
 def _inventory_digest(inventory):
@@ -596,19 +632,22 @@ def recover_transaction(journal, *, stop_service, start_service):
             raise MigrationError('Небезопасная ссылка вместо журнала миграции.')
         state = json.loads(journal.read_text(encoding='utf-8'))
         home, stage, backup = Path(state['home']), Path(state['stage']), Path(state['backup'])
-        if state.get('schema') != 1 or home.parent.resolve() != stage.parent.resolve():
+        if state.get('schema') not in (1, 2) or home.parent.resolve() != stage.parent.resolve():
             raise ValueError
         if state['status'] in ('complete', 'rolled_back'):
             return state['status']
         if state['status'] == 'prepared':
             return 'prepared'
-        if state['status'] not in ('stopping', 'switched', 'starting', 'health_check'):
+        if state['schema'] == 2 and state['status'] in ('stopping', 'restored'):
+            start_service()
+            state['status'] = 'rolled_back'
+            _write_journal(journal, state)
+            return state['status']
+        if state['status'] not in ('stopping', 'ready', 'switched', 'starting', 'health_check'):
             raise ValueError
-        # A stage directory exists on both sides of the atomic exchange. The
-        # durable state says whether the exchange was recorded, but a power loss
-        # can land between exchange and journal write; inspect verified tree IDs.
+        # The stage marker identifies which side of the exchange is live,
+        # including a crash between exchange and the next journal write.
         live_id = state['target_tree_id']
-        stage_id = state['source_tree_id']
         live_marker = home / 'spool/migrations/legacy-source-plan.json'
         stage_marker = stage / 'spool/migrations/legacy-source-plan.json'
         live_is_target = live_marker.is_file() and json.loads(live_marker.read_text()).get('id') == live_id
@@ -623,10 +662,14 @@ def recover_transaction(journal, *, stop_service, start_service):
                 raise MigrationError('Старый каталог отличается от полной копии; автоматический откат остановлен.')
             stop_service()
             exchange_directories(home, stage)
+            nook_update.sync_directory(home.parent)
         elif _inventory(home) != backup_inventory:
             raise MigrationError('Рабочий каталог отличается от полной копии; автоматический откат остановлен.')
         else:
             stop_service()
+        state['schema'] = 2
+        state['status'] = 'restored'
+        _write_journal(journal, state)
         start_service()
         state['status'] = 'rolled_back'
         _write_journal(journal, state)
@@ -655,51 +698,52 @@ def migrate_transaction(home, old_source, target_source, *, old_revision, target
             or proof.get('revision') != target_revision
             or proof.get('verified_by') != 'nook_update.fetch_release_source'):
         raise MigrationError('Целевая версия не подтверждена механизмом подписи релизов Nook.')
-    if journal.exists():
+    if journal.is_symlink() or journal.exists():
         raise MigrationError('Уже существует журнал миграции; сначала выполните восстановление.')
-    plan = plan_source_migration(home, old_source, target_source, old_revision=old_revision)
-    source_tree_id = uuid.uuid4().hex
-    snapshot = create_snapshot(home, backup, min_free_bytes=64 * 1024 * 1024)
+    plan_source_migration(home, old_source, target_source, old_revision=old_revision)
+    _check_legacy_queue(home)
+    if home.stat().st_dev != backup.parent.stat().st_dev:
+        raise MigrationError('Резервная копия должна находиться на той же файловой системе.')
+    if getattr(ctypes.CDLL(None), 'renameat2', None) is None:
+        raise MigrationError('ОС не предоставляет атомарную замену каталогов; живой инстанс не изменён.')
+    # Package resolution and downloads run before any downtime. Recheck the
+    # inputs that control this venv once the old service has stopped.
+    build = backup.parent / ('.nook-venv-' + uuid.uuid4().hex)
+    build.mkdir(mode=0o700)
     try:
-        record = stage_source_tree(home, target_source, plan, stage)
-        record['id'] = source_tree_id
-        marker = stage / 'spool/migrations/legacy-source-plan.json'
-        marker.write_text(json.dumps(record, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
-        os.chmod(marker, 0o600)
-        build_staged_environment(home, stage, target_source, python=python)
-        if (stage / nook_update.STATE).exists():
-            raise MigrationError('Обнаружено состояние современной установки; автоматическая миграция остановлена.')
-        installed_manifest = _source_manifest(target_source)
-        installed_files = {
-            name: nook_update.digest((stage / name).read_bytes())
-            for name in installed_manifest['sha256'] if nook_update.managed(name)
-        }
-        installed_files['MANIFEST.json'] = nook_update.digest((stage / 'MANIFEST.json').read_bytes())
-        nook_update.json_write(stage / nook_update.STATE,
-                               {'schema': 1, 'revision': target_revision, 'files': installed_files})
+        old_venv = home / '.venv'
+        venv_inventory = _inventory(old_venv) if old_venv.exists() else {}
+        build_staged_environment(home, build, target_source, python=python)
+        _relocate_venv(build / '.venv', home / '.venv')
         state = {
-            'schema': 1, 'home': str(home), 'stage': str(stage), 'backup': str(backup),
+            'schema': 2, 'home': str(home), 'stage': str(stage), 'backup': str(backup),
             'source_version': profile.version, 'source_commit': profile.commit,
-            'target_version': plan['target_version'], 'target_revision': target_revision,
-            'source_tree_id': source_tree_id,
-            'target_tree_id': source_tree_id, 'backup_sha256': snapshot['sha256'],
-            'status': 'prepared',
+            'target_version': proof['version'], 'target_revision': target_revision,
+            'status': 'stopping',
         }
-        _write_journal(journal, state)
-        state['status'] = 'stopping'
         _write_journal(journal, state)
         stop_service()
-        if _inventory(home) != _inventory(backup):
-            start_service()
-            state['status'] = 'rolled_back'
-            _write_journal(journal, state)
-            raise MigrationError('Данные изменились во время подготовки; ничего не переключено. Повтори миграцию.')
-        if not _matches_snapshot_excluding_stage_changes(backup, stage, plan['changes']):
-            start_service()
-            state['status'] = 'rolled_back'
-            _write_journal(journal, state)
-            raise MigrationError('Runtime изменился во время staging; ничего не переключено. Повтори миграцию.')
+        _check_legacy_queue(home)
+        if (_inventory(old_venv) if old_venv.exists() else {}) != venv_inventory:
+            raise MigrationError('Зависимости изменились во время подготовки; повтори миграцию.')
+        plan = plan_source_migration(home, old_source, target_source, old_revision=old_revision)
+        snapshot = create_snapshot(home, backup, min_free_bytes=64 * 1024 * 1024)
+        record = stage_source_tree(home, target_source, plan, stage, snapshot=backup)
+        (build / '.venv').rename(stage / '.venv')
+        installed_manifest = _source_manifest(target_source)
+        managed = {name for name in installed_manifest['sha256'] if nook_update.managed(name)}
+        installed_files = {name: nook_update.digest(nook_update.rendered(
+            (Path(target_source) / name).read_bytes(), home)) for name in managed | {'MANIFEST.json'}}
+        nook_update.json_write(stage / nook_update.STATE,
+                               {'schema': 1, 'revision': target_revision, 'files': installed_files})
+        if (_inventory_digest(_inventory(home)) != snapshot['sha256']
+                or not _matches_snapshot_excluding_stage_changes(backup, stage, plan['changes'])):
+            raise MigrationError('Данные изменились после остановки службы; повтори миграцию.')
+        _sync_trees(home.parent)
+        state.update(status='ready', target_tree_id=record['id'], backup_sha256=snapshot['sha256'])
+        _write_journal(journal, state)
         exchange_directories(home, stage)
+        nook_update.sync_directory(home.parent)
         state['status'] = 'switched'
         _write_journal(journal, state)
         state['status'] = 'starting'
@@ -721,6 +765,8 @@ def migrate_transaction(home, old_source, target_source, *, old_revision, target
                 # independently invokable recovery command.
                 pass
         raise
+    finally:
+        shutil.rmtree(build, ignore_errors=True)
 
 
 def _user_service(home, *, require_active=True):
@@ -733,12 +779,12 @@ def _user_service(home, *, require_active=True):
         candidates = [line.split()[0] for line in listed.stdout.splitlines()
                       if line.split() and line.split()[0].endswith('.service')]
         matches = []
-        for unit in candidates[:500]:
+        for unit in list(dict.fromkeys(['nook.service', *candidates]))[:500]:
             result = subprocess.run(['systemctl', '--user', 'show', unit,
                 '--property=WorkingDirectory,ActiveState'], capture_output=True,
                 text=True, timeout=15)
             fields = dict(line.split('=', 1) for line in result.stdout.splitlines() if '=' in line)
-            if fields.get('WorkingDirectory') == str(Path(home).resolve()):
+            if result.returncode == 0 and fields.get('WorkingDirectory') == str(Path(home).resolve()):
                 matches.append((unit, fields.get('ActiveState')))
         if len(matches) != 1 or require_active and matches[0][1] != 'active':
             raise ValueError
@@ -758,7 +804,7 @@ def _service_action(unit, action):
 
 def _wait_healthy(home, unit, revision, *, timeout=120, stable=20):
     health_path = nook_update.workspace(home) / 'health.json'
-    deadline, good_since = time.monotonic() + timeout, None
+    deadline, good_since, last_pid = time.monotonic() + timeout, None, None
     while time.monotonic() < deadline:
         try:
             result = subprocess.run(['systemctl', '--user', 'show', unit,
@@ -771,12 +817,13 @@ def _wait_healthy(home, unit, revision, *, timeout=120, stable=20):
                 and fields.get('WorkingDirectory') == str(Path(home).resolve())
                 and main_pid > 0 and health.get('pid') == main_pid
                 and health.get('revision') == revision and not health.get('failed_mods')
-                and time.time() - float(health.get('time', 0)) < 10)
+                and 0 <= time.time() - float(health.get('time', 0)) < 10)
         except (OSError, ValueError, TypeError, subprocess.SubprocessError):
             healthy = False
         if healthy:
-            if good_since is None:
+            if good_since is None or main_pid != last_pid:
                 good_since = time.monotonic()
+                last_pid = main_pid
             elif time.monotonic() - good_since >= stable:
                 return True
         else:
@@ -801,22 +848,55 @@ def _find_release(version, home):
     raise MigrationError('Для этой версии нет архива с проверяемой Sigstore provenance.')
 
 
+@contextmanager
+def _migration_lock(journal):
+    path = journal.with_suffix('.lock')
+    fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, 'r+b') as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise MigrationError('Другая миграция или восстановление уже выполняется.') from None
+        yield
+
+
 def cli(argv=None):
     parser = argparse.ArgumentParser(description='Переходный обновлятор Nook 0.1.0/0.1.1')
     parser.add_argument('action', choices=('migrate', 'recover'))
     parser.add_argument('--home', required=True, type=Path)
     parser.add_argument('--target-version')
     args = parser.parse_args(argv)
-    home = args.home.expanduser().resolve()
+    home = args.home.expanduser().absolute()
+    if home.is_symlink() or not home.is_dir():
+        parser.error('Укажи обычный каталог установленного Nook.')
+    home = home.resolve()
+    if args.action == 'migrate' and not args.target_version:
+        parser.error('Для миграции укажи --target-version из опубликованных релизов.')
+    os.umask(0o077)
     journal = home.parent / ('.' + home.name + '.nook-migration.json')
+    try:
+        with _migration_lock(journal):
+            return _run_cli(args, home, journal)
+    except (MigrationError, nook_update.UpdateError, OSError, subprocess.SubprocessError) as exc:
+        parser.exit(1, str(exc) + '\n')
+
+
+def _run_cli(args, home, journal):
     unit = _user_service(home, require_active=args.action != 'recover')
     stop = lambda: _service_action(unit, 'stop')
     start = lambda: _service_action(unit, 'start')
     if args.action == 'recover':
         print(recover_transaction(journal, stop_service=stop, start_service=start))
         return 0
-    if not args.target_version:
-        parser.error('Для миграции укажи --target-version из опубликованных релизов.')
+    if journal.is_symlink():
+        raise MigrationError('Небезопасная ссылка вместо журнала миграции.')
+    if journal.exists():
+        previous = _read_json(journal)
+        if previous.get('status') != 'rolled_back':
+            raise MigrationError('Уже существует журнал миграции; проверь его или выполни recover.')
+        archived = journal.with_name(journal.stem + '-' + uuid.uuid4().hex + journal.suffix)
+        journal.rename(archived)
+        nook_update.sync_directory(journal.parent)
     profile = identify_install(home)
     release = _find_release(args.target_version, home)
     ident = uuid.uuid4().hex
@@ -826,11 +906,15 @@ def cli(argv=None):
     try:
         old_source = fetch_legacy_source(profile, work / 'legacy-source')
         target_source, target_revision = fetch_target_release(release, work / 'target-release')
-        state = migrate_transaction(home, old_source, target_source,
-            old_revision=profile.commit, target_revision=target_revision,
-            backup=work / 'complete-backup', stage=stage,
-            journal=journal, stop_service=stop, start_service=start,
-            health_check=lambda root, _version: _wait_healthy(root, unit, target_revision))
+        # The original v0.1.1 updater uses this same lock. An already
+        # queued request remains visible and blocks cutover.
+        legacy_lock = nook_update.lock(home) if profile.version == '0.1.1' else nullcontext()
+        with legacy_lock:
+            state = migrate_transaction(home, old_source, target_source,
+                old_revision=profile.commit, target_revision=target_revision,
+                backup=work / 'complete-backup', stage=stage,
+                journal=journal, stop_service=stop, start_service=start,
+                health_check=lambda root, _version: _wait_healthy(root, unit, target_revision))
         print(json.dumps({'status': state['status'], 'from': profile.version,
             'to': state['target_version'], 'backup': str(work / 'complete-backup')}, ensure_ascii=False))
         return 0
