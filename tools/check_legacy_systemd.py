@@ -41,11 +41,12 @@ if not is_legacy and sys.argv[1] == 'upgrade':
 
     import bot as nook_bot
     from aiogram.client.session.base import BaseSession
-    from aiogram.methods import DeleteMessage, DeleteMessages, DeleteMyCommands, GetMe, GetUpdates, SendMessage
+    from aiogram.methods import DeleteMyCommands, GetMe, GetUpdates, SendMessage
     from aiogram.types import Message, Update, User
 
     class TestTelegram(BaseSession):
         sent_update = False
+        saw_reminder = False
 
         async def close(self):
             pass
@@ -57,7 +58,7 @@ if not is_legacy and sys.argv[1] == 'upgrade':
         async def make_request(self, bot, method, timeout=None):
             if isinstance(method, GetMe):
                 return User(id=123456, is_bot=True, first_name='Fixture', username='fixture_bot')
-            if isinstance(method, (DeleteMessage, DeleteMessages, DeleteMyCommands)):
+            if isinstance(method, DeleteMyCommands):
                 return True
             if isinstance(method, GetUpdates):
                 if self.sent_update:
@@ -73,15 +74,24 @@ if not is_legacy and sys.argv[1] == 'upgrade':
                     },
                 })]
             if isinstance(method, SendMessage):
-                if 'migration-reminder' in method.text:
-                    (home / 'memory/started').write_text(version)
+                self.saw_reminder = 'migration-reminder' in method.text
                 return Message.model_validate({
                     'message_id': 2, 'date': int(time.time()),
                     'chat': {'id': 77, 'type': 'private'}, 'text': method.text,
                 })
             raise AssertionError(f'unexpected Telegram method {type(method).__name__}')
 
-    nook_bot.bot.session = TestTelegram()
+    session = TestTelegram()
+
+    async def direct_telegram(method, **params):
+        if method == 'deleteMessages':
+            if session.saw_reminder and params['message_ids'] == [1]:
+                (home / 'memory/started').write_text(version)
+            return True
+        raise AssertionError(f'unexpected direct Telegram method {method}')
+
+    nook_bot.bot.session = session
+    nook_bot.tg = direct_telegram
     with suppress(KeyboardInterrupt):
         asyncio.run(nook_bot.main())
     raise SystemExit(0)
@@ -203,13 +213,17 @@ def check(base, version, mode, artifact):
             'nook-fixture', str(home / 'memory/started'))
         backup = base / 'backup'
         journal = migration._journal_path(home)
+        def check_health(root, _version):
+            assert_runtime(root, runtime)
+            return migration._wait_healthy(root, unit, release['revision'],
+                                           timeout=25 if mode == 'upgrade' else 12, stable=2)
+
         transaction = lambda: migration.migrate_transaction(
             home, source, target, old_revision=commit, target_revision=release['revision'],
             backup=backup, stage=base / 'stage', journal=journal,
             stop_service=lambda: migration._service_action(unit, 'stop'),
             start_service=lambda: migration._service_action(unit, 'start'),
-            health_check=lambda root, _version: migration._wait_healthy(
-                root, unit, release['revision'], timeout=25 if mode == 'upgrade' else 12, stable=2),
+            health_check=check_health,
         )
         if mode == 'offline':
             with (patch.dict(os.environ, {'PIP_NO_INDEX': '1'}),
@@ -261,14 +275,20 @@ def check(base, version, mode, artifact):
         run('timeout', '10', 'bash', '-c', 'until [[ "$(cat "$1")" == "$2" ]]; do sleep .1; done',
             'nook-fixture', str(home / 'memory/started'), expected)
         assert json.loads((home / 'MANIFEST.json').read_text())['version'] == expected
-        assert_runtime(home, runtime)
         assert_runtime(backup, runtime)
         assert unit_file.read_text() == unit_contents
         if mode == 'upgrade':
+            original = json.loads((backup / 'state.json').read_text())
+            active = json.loads((home / 'state.json').read_text())
+            assert all(active.get(key) == value for key, value in original.items())
+            assert active['view_msgs'] == [2]
+            assert_runtime(home, {name: entry for name, entry in runtime.items() if name != 'state.json'})
             journal_output = run('journalctl', '--user', '-u', unit, '--no-pager',
                                  '-o', 'cat', capture_output=True).stdout
             assert 'Traceback' not in journal_output, journal_output
             assert 'ERROR' not in journal_output, journal_output
+        else:
+            assert_runtime(home, runtime)
         assert (home / 'memory/last-write').read_text() == version
         assert (backup / 'memory/last-write').read_text() == version
         assert migration._user_service(home) == unit

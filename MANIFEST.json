@@ -129,7 +129,7 @@
     "tool_executor.py": "4198da0cba1b1d9ce51a84cfece84a3b6f9a6c3ff8d0aa09c3567c0709c76ae6",
     "tools/benchmark.py": "b7812ff646c7ea5d0a2c2c8dcd938d37eafa8377f3786ff6c32e8c1b9a8778dc",
     "tools/build_release.py": "7c67b153f0f6dfbb86890e0bd7e446b2ed822ada4847eb996fbff6ad8fd77514",
-    "tools/check_legacy_systemd.py": "a2421d7a4f8b7cba836049f362550c646a68e3a727987c1b63b71a4b3c3b2b30",
+    "tools/check_legacy_systemd.py": "60a729080b9a297ebe17d7067f203668bfb9bdea975fc54886446ca6cf3ee693",
     "tools/github_setup.py": "a55adc6ddc8166b97060e4496257f0e330e6da688d24818c8e5a5b54768115ef",
     "tools/release_notes.py": "d64ce495d8d856d2df5f880abaa13ed9d62919c2241386db0c418b43af2ddb34",
     "tools/release_promotion.py": "c1a948a7fb3cd5515799cd2bf683dd76d7ecbc3c54e12963a6000cdb5293f724",
