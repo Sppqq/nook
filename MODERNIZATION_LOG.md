@@ -5,6 +5,8 @@
 - Exercised the background resume loop with one distant reset and one
   recovered account. It clears the persisted fallback state and resumes
   the same thread. The digest reports that work can continue.
+- Codex-only installations keep their configured engine while tasks are
+  paused. Automatic Mercury routing requires a configured Mercury key.
 
 ## Iteration 10 — Alpha onboarding and contribution guides
 

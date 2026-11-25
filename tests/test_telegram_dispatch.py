@@ -125,6 +125,7 @@ else:
 
         pool.read_limits = quota
         self.runtime["notify"] = AsyncMock()
+        self.runtime["mercury_key"] = Mock(return_value=None)
         await self.runtime["pause_for_limit"]({
             "lane": "user", "thread": "fixture-thread", "prompt": "continue",
             "title": "Test turn", "background": False, "header": "",
@@ -134,6 +135,10 @@ else:
         message = self.runtime["notify"].await_args.args[0]
         self.assertIn("Проверю пул", message)
         self.assertNotIn("после сброса", message)
+        self.assertNotIn("Mercury", message)
+        self.assertEqual(self.runtime["engine_for"](), "codex")
+        self.runtime["mercury_key"].return_value = "fixture-only"
+        self.assertEqual(self.runtime["engine_for"](), "mercury")
 
         async def available(env):
             account = (Path(env["CODEX_HOME"]) / "auth.json").read_text()

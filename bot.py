@@ -1093,7 +1093,7 @@ def fallback_active():
 
     if is_antigravity_model(CFG.get("model")):  # принудительная антигравити — без отката на Mercury
         return False
-    return STATE.get("fallback_until", 0) > time.time()
+    return STATE.get("fallback_until", 0) > time.time() and bool(mercury_key())
 
 
 def engine_for(thread_id=None):
@@ -1418,7 +1418,9 @@ async def pause_for_limit(item, partial=""):
         else:
             message = (f"{E('stop')} **Лимит Codex кончился посреди задачи.** "
                        f"Продолжу её сам после сброса ({until(reset)}).")
-        await notify(message + " Пока новые задачи делаю на быстрой модели Mercury ⚡."
+        if fallback_active():
+            message += " Пока новые задачи делаю на быстрой модели Mercury ⚡."
+        await notify(message
                      + (f"\n\n*Успел:* {partial[-800:]}" if partial else ""),
                      markup=kb((btn("Лимиты", "limits!", "limits"), btn("Меню", "menu", "home"))), kind="limit")
 
