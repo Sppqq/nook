@@ -62,7 +62,7 @@ def setup(m):
                 for w in fresh_windows(account, model)
             )
             text += f"\n`{account.name}` · " + (summary or tr("Квота неизвестна", "Quota unavailable"))
-        await (ctx.edit if ctx.cb else ctx.reply)(text, rows)
+        await ctx.menu(text, rows)
 
     async def settings(ctx):
         strategy = m.state.get("strategy", "active")

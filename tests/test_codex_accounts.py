@@ -59,7 +59,7 @@ class AccountTests(unittest.IsolatedAsyncioTestCase):
             def text(self, russian, english):return english if self.english else russian
             async def send(self,text):pass
         class Ctx:
-            arg=test.mod.account_id(test.stored[1]);chat=123
+            arg=test.mod.account_id(test.stored[1]);chat=123;cb=None
             async def toast(self,*a):pass
             async def reply(self,*a):pass
             edit=reply
@@ -187,9 +187,10 @@ class AccountTests(unittest.IsolatedAsyncioTestCase):
             'primary': {'used_percent': 42, 'window_minutes': 300},
         }
         messages = []
-        async def reply(text):
+        async def edit(text, buttons):
             messages.append(text)
-        self.ctx.reply = reply
+            self.assertEqual(buttons[0][0][1], 'open')
+        self.ctx.edit = edit
         await self.m.handlers['limits'](self.ctx)
         self.assertIn(('list', '--api', '--json'), self.calls)
         self.assertIn('300 min: **42%**', messages[0])
@@ -205,7 +206,8 @@ class AccountTests(unittest.IsolatedAsyncioTestCase):
         async def reply(text, buttons=None):
             messages.append((text, buttons))
 
-        self.ctx.reply = reply
+        self.ctx.cb = object()
+        self.ctx.edit = reply
         await self.m.handlers['switch'](self.ctx)
         self.assertIn('Choose a Codex account', messages[0][0])
         self.assertEqual(messages[0][1][0][0][0], '✅ Account 1')

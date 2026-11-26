@@ -104,8 +104,9 @@ class TelegramDispatchTests(unittest.IsolatedAsyncioTestCase):
             for window, usage in zip(windows, (89, 90, 1))
         })
 
+        registry.core.notify = AsyncMock(return_value=51)
         await mod.periodic[0][1]()
-        text = registry.core.send.await_args.args[1]
+        text = registry.core.notify.await_args.args[0]
         self.assertEqual(text.count(account.name), 2)
         self.assertEqual(text.count('5 ч'), 1)
         self.assertEqual(text.count('неделя'), 1)
