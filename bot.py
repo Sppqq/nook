@@ -1825,8 +1825,12 @@ async def view_limits():
     agy_text = antigravity_limits.format_limits(agy, bar)
     model, _ = current_model()
     parts = (agy_text, codex_text) if is_antigravity_model(model) else (codex_text, agy_text)
-    text = "\n\n".join(parts)
-    rows = [(btn(ui_text("Обновить", "Refresh"), "limits!", "refresh"),)]
+    text = f"**{ui_text('Модель', 'Model')}** · {model_label()}\n\n" + "\n\n".join(parts)
+    rows = [tuple(
+        btn(("✓ " if choice == model else "") + MODELS[choice][0],
+            f"lm:{choice}", None, "primary" if choice == model else None)
+        for choice in LIMIT_MODELS
+    ), (btn(ui_text("Обновить", "Refresh"), "limits!", "refresh"),)]
     if "codex_pool" in REG.mods:
         rows.append((btn(ui_text("Пул Codex", "Codex pool"), "mod:codex_pool:open", "chatgpt"),))
     return text, kb(*rows, back())
@@ -1856,9 +1860,12 @@ async def view_jobs():
     return "\n".join(lines), kb(*rows, back())
 
 
+LIMIT_MODELS = ("gpt-6.2-sol", "gpt-6.2-astra")
 MODELS = {  # из `codex app-server` model/list
     "gpt-6-luna": ("6 Luna", ["low", "medium", "high", "xhigh", "max"], "medium"),
     "gpt-6.1-sol": ("6.1 Sol", ["low", "medium", "high", "xhigh", "max", "ultra"], "low"),
+    "gpt-6.2-sol": ("6.2 Sol", ["low", "medium", "high", "xhigh", "max", "ultra"], "low"),
+    "gpt-6.2-astra": ("6.2 Astra", ["low", "medium", "high", "xhigh", "max", "ultra"], "low"),
     "mercury-3": ("Mercury 3 ⚡", ["low", "medium", "high"], "low"),  # не Codex: свой агент run_mercury
     "antigravity-argon": ("4 Argon", ["low", "medium", "high"], "medium"),
     "antigravity-carbon": ("4 Carbon", ["low", "medium", "high"], "high"),
@@ -2302,16 +2309,33 @@ def is_view_msg(mid):
     return mid in STATE.get("view_msgs", [])
 
 
+MENU_LOCK = asyncio.Lock()
+
+
+async def show_menu(chat_id, text, markup, edit_id=None):
+    """Replace the tracked menu without deleting the notification that opened it."""
+    async with MENU_LOCK:
+        previous = STATE.get("view_msgs", [])
+        mid = edit_id if edit_id in previous else None
+        if not (mid and await edit(chat_id, mid, text, markup)):
+            mid = await post(chat_id, text, markup)
+        STATE["view_msgs"] = [mid]
+        save_state()
+        await delete_msgs(chat_id, [part for old in previous if old != mid for part in msg_group(old)])
+        return mid
+
+
 async def show(chat_id, view, edit_id=None):
-    """Показать экран меню. Редактируем только сообщения-меню; из уведомлений — новым сообщением."""
     text, markup = await VIEWS[view]()
-    if edit_id and is_view_msg(edit_id) and await edit(chat_id, edit_id, text, markup):
-        return
-    mid = await post(chat_id, text, markup)
-    old = [m for m in STATE.get("view_msgs", []) if m != edit_id]
-    STATE["view_msgs"] = [m for m in STATE.get("view_msgs", []) if m == edit_id] + [mid]
-    save_state()
-    await delete_msgs(chat_id, old)  # одно меню в чате — старые убираем
+    return await show_menu(chat_id, text, markup, edit_id)
+
+
+async def close_menu(chat_id, mid):
+    async with MENU_LOCK:
+        ids = msg_group(mid)
+        STATE["view_msgs"] = [m for m in STATE.get("view_msgs", []) if m not in ids]
+        save_state()
+        return await delete_msgs(chat_id, ids)
 
 
 async def delete_msgs(chat_id, ids):
@@ -2401,7 +2425,7 @@ async def reply_command(msg, word):
 
 
 # кнопки, после которых уведомление остаётся: переключатели и просмотр внутри самого сообщения
-SLOW_VIEWS = ("status", "limits")
+SLOW_VIEWS = ("status",)
 KEEP_AFTER = ("mq:", "gr:", "gg:", "fav", "close", "rshow:", "wipe")
 
 
@@ -2450,6 +2474,13 @@ async def handle_button(cb: CallbackQuery):
         save_state()
         await cb.answer(ui_text("Сохранено", "Saved"))
         return await show(chat, "settings" if section == "home" else "settings_" + section, mid)
+    if data in ("limits", "limits!"):
+        force = FORCE.set(data.endswith("!"))
+        try:
+            await cb.answer(ui_text("Обновляю лимиты…", "Refreshing quotas…") if FORCE.get() else None)
+            return await show(chat, "limits", mid)
+        finally:
+            FORCE.reset(force)
     if data.endswith("!") and data[:-1] in VIEWS:
         FORCE.set(True)
         await cb.answer()
@@ -2468,10 +2499,7 @@ async def handle_button(cb: CallbackQuery):
         return await show(chat, "more", mid)
     if data == "close":
         await cb.answer()
-        ids = msg_group(mid)
-        STATE["view_msgs"] = [m for m in STATE.get("view_msgs", []) if m not in ids]
-        save_state()
-        return await delete_msgs(chat, ids)
+        return await close_menu(chat, mid)
     if data == "wipe":
         await cb.answer()
         return await edit(chat, mid, f"{E('warn')} **Очистить чат?**\n\nУдалю всю переписку со мной за последние 48 часов "
@@ -2494,13 +2522,15 @@ async def handle_button(cb: CallbackQuery):
         return await cb.answer(stop_all([user_lane]))
     if data == "stop:bg":
         return await cb.answer(stop_all([bg_lane]))
-    if data.startswith("m:") and data[2:] in MODELS:
-        CFG["model"] = data[2:]
-        if CFG.get("effort") not in MODELS[data[2:]][1]:
-            CFG["effort"] = MODELS[data[2:]][2]
+    model_action, _, model_id = data.partition(":")
+    if (model_action == "m" and model_id in MODELS
+            or model_action == "lm" and model_id in LIMIT_MODELS):
+        _, effort = current_model()
+        _, efforts, default = MODELS[model_id]
+        CFG.update(model=model_id, effort=effort if effort in efforts else default)
         save_config()
         await cb.answer(f"{ui_text('Модель', 'Model')}: {model_label()}")
-        return await show(chat, "model", mid)
+        return await show(chat, "limits" if model_action == "lm" else "model", mid)
     if data.startswith("ef:"):
         CFG["effort"] = data[3:]
         save_config()
@@ -4999,6 +5029,7 @@ async def mod_error(mod, where, e, tb):
 
 core = type("Core", (), {})()
 core.send, core.edit, core.notify, core.btn, core.kb, core.E = send, edit, notify, btn, kb, E
+core.show_menu, core.is_view_msg, core.close_menu = show_menu, is_view_msg, close_menu
 core.owner_ask, core.mod_error, core.base_commands = owner_ask, mod_error, BASE_COMMANDS
 core.owner = lambda: STATE["owner_id"]
 core.llm = llm

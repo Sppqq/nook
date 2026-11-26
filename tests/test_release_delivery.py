@@ -58,6 +58,20 @@ class ReleaseDeliveryTests(unittest.TestCase):
                     installer.migrate_from_release('/legacy home', version)
                 run.assert_not_called()
 
+    def test_migration_channel_resolves_latest_eligible_signed_version(self):
+        with tempfile.TemporaryDirectory() as name:
+            source = Path(name)
+            (source / 'legacy_migration.py').touch()
+            releases = [release('0.1.2-alpha.1'), release('0.1.2-alpha.2'),
+                        release('0.1.2-alpha.3', signed=False), release('0.1.3-nightly.20261126')]
+            with (patch('nook_update.list_releases', return_value=releases),
+                  patch('nook_update.fetch_release_source', return_value=(source, 'a' * 40)) as fetch,
+                  patch.object(installer.subprocess, 'run') as run):
+                run.return_value.returncode = 0
+                self.assertEqual(installer.migrate_from_release('/legacy', channel='alpha'), 0)
+            self.assertEqual(fetch.call_args.args[0]['version'], '0.1.2-alpha.2')
+            self.assertEqual(run.call_args.args[0][-2:], ['--target-version', '0.1.2-alpha.2'])
+
     def test_exact_release_infers_channel_and_unsigned_versions_are_unavailable(self):
         version = '1.1.0-beta.1'
         self.assertEqual(installer.choose_channel(version=version), 'beta')
