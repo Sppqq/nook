@@ -8,6 +8,7 @@ import shutil
 import tempfile
 import time
 import unittest
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
 from aiogram.types import CallbackQuery, Update
@@ -59,6 +60,55 @@ class TelegramDispatchTests(unittest.IsolatedAsyncioTestCase):
         })
         with patch.object(CallbackQuery, 'answer', new_callable=AsyncMock):
             await self.runtime['dp'].feed_update(self.runtime['bot'], update)
+
+    async def test_limits_switch_edits_one_menu_and_replaces_failed_edit(self):
+        runtime = self.runtime
+        runtime['STATE'].update(view_msgs=[49, 50], ui_language='en', fallback_until=0)
+        runtime['CFG'].update(model='gpt-6.1-sol', effort='high')
+        runtime['get_limits'] = AsyncMock(return_value=None)
+        runtime['antigravity_limits'] = Mock(get_limits=AsyncMock(return_value=None), format_limits=Mock(return_value=''))
+        runtime['edit'] = AsyncMock(side_effect=[True, False])
+        runtime['post'] = AsyncMock(return_value=51)
+        runtime['delete_msgs'] = AsyncMock()
+
+        await self.dispatch('lm:gpt-6.2-sol')
+        self.assertEqual((runtime['CFG']['model'], runtime['CFG']['effort']), ('gpt-6.2-sol', 'high'))
+        self.assertEqual(runtime['STATE']['view_msgs'], [50])
+        runtime['delete_msgs'].assert_awaited_once_with(7, [49])
+        runtime['post'].assert_not_awaited()
+        self.assertIn('6.2 Sol · high', runtime['edit'].await_args.args[2])
+
+        await self.dispatch('limits!')
+        self.assertEqual(runtime['STATE']['view_msgs'], [51])
+        runtime['delete_msgs'].assert_awaited_with(7, [50])
+        self.assertEqual(runtime['post'].await_args.args[2].inline_keyboard[0][0].text, '✓ 6.2 Sol')
+        runtime['antigravity_limits'].get_limits.assert_awaited_with(force=True)
+
+    async def test_pool_five_hour_reset_requires_ninety_percent(self):
+        from test_codex_pool import fake_accounts
+
+        registry = self.runtime['REG']
+        mod = registry.mods['codex_pool']
+        pool = mod.pool
+        pool.root = self.home / '.codex'
+        fake_accounts(pool.root)
+        account = pool.accounts()[0]
+        model = registry.core.codex_model()
+        now = time.time()
+        windows = [SimpleNamespace(key=('codex', key), minutes=minutes, used=0, reset=now + minutes * 60)
+                   for key, minutes in (('small', 300), ('full', 300), ('week', 10080))]
+        pool.cache[(account, model)] = (time.monotonic(), SimpleNamespace(windows=windows))
+        pool.refresh = AsyncMock()
+        mod.state.update(enabled=True, notify=True, windows={
+            f'{account.ident}/codex/{window.key[1]}/{window.minutes}': [now - 1, usage]
+            for window, usage in zip(windows, (89, 90, 1))
+        })
+
+        await mod.periodic[0][1]()
+        text = registry.core.send.await_args.args[1]
+        self.assertEqual(text.count(account.name), 2)
+        self.assertEqual(text.count('5 ч'), 1)
+        self.assertEqual(text.count('неделя'), 1)
 
     async def test_dependency_update_reports_health_before_polling_or_background_work(self):
         runtime = self.runtime

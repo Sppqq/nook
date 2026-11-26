@@ -104,7 +104,11 @@ def setup(m):
 
     @m.button('Сменить аккаунт Codex', icon='refresh', where='menu', english='Switch Codex account')
     async def switch(ctx):
-        await show(ctx)
+        await show(ctx, edit=bool(ctx.cb))
+
+    @m.callback('open')
+    async def open_accounts(ctx):
+        await show(ctx, edit=True)
 
     @m.callback('limits')
     async def limits(ctx):
@@ -122,7 +126,8 @@ def setup(m):
                     stored = await accounts()
                 except (OSError, RuntimeError, ValueError, asyncio.TimeoutError):
                     return await ctx.reply(t('Не удалось прочитать лимиты аккаунтов Codex.', 'Could not read Codex account quotas.'))
-        await ctx.reply(format_account_limits(stored, core['win_name'], refreshed, t))
+        await ctx.edit(format_account_limits(stored, core['win_name'], refreshed, t),
+                       [[m.btn(t('Аккаунты Codex', 'Codex accounts'), 'open')]])
 
     @m.callback('select')
     async def select(ctx):
@@ -182,7 +187,7 @@ def setup(m):
     async def close(ctx):
         await ctx.toast(t('Закрыто', 'Closed'))
         if ctx.cb:
-            await ctx.cb.message.delete()
+            await m.core.close_menu(ctx.chat, ctx.cb.message.message_id)
 
     @m.callback('login')
     async def login(ctx):

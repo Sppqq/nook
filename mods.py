@@ -64,6 +64,9 @@ class Ctx:
 
     async def edit(self, text, buttons=None):
         """Заменить сообщение, на котором нажали кнопку (иначе — новое)."""
+        if self.cb and getattr(self.mod.core, "is_view_msg", lambda _: False)(self.cb.message.message_id):
+            return await self.mod.core.show_menu(
+                self.chat, text, self.mod._markup(buttons), self.cb.message.message_id)
         if self.cb and await self.mod.core.edit(self.chat, self.cb.message.message_id, text, self.mod._markup(buttons)):
             return self.cb.message.message_id
         return await self.reply(text, buttons)

@@ -71,11 +71,12 @@ def install_from_source(argv, *, channel=None, version=None, yes=False, dev=Fals
         raise SystemExit(str(error)) from None
 
 
-def migrate_from_release(home, version):
+def migrate_from_release(home, version=None, *, channel=None):
     from nook_update import UpdateError, fetch_release_source, list_releases
 
     try:
-        release = published(list_releases(), channel_for_version(version), version)
+        release = published(list_releases(), choose_channel(channel, version), version)
+        version = release['version']
         with tempfile.TemporaryDirectory(prefix='nook-migrate-') as stage:
             source, _ = fetch_release_source(release, Path(stage))
             supervisor = source / 'legacy_migration.py'
@@ -91,10 +92,12 @@ def main():
     if sys.argv[1:2] == ['--migrate']:
         parser = argparse.ArgumentParser(prog='bootstrap.sh --migrate', allow_abbrev=False)
         parser.add_argument('--home', required=True)
-        parser.add_argument('--version', required=True)
+        target = parser.add_mutually_exclusive_group(required=True)
+        target.add_argument('--version')
+        target.add_argument('--channel', choices=CHANNELS)
         parser.add_argument('--yes', action='store_true', required=True)
         args = parser.parse_args(sys.argv[2:])
-        sys.exit(migrate_from_release(args.home, args.version))
+        sys.exit(migrate_from_release(args.home, args.version, channel=args.channel))
     parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
     parser.add_argument('--channel', choices=CHANNELS)
     parser.add_argument('--version')

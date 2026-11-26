@@ -81,14 +81,18 @@ VCS требуют ручного согласования. Версии пол�
 В интерактивном SSH под владельцем службы дождись завершения задач и отмени
 запросы старого обновлятора. Сохрани официальный загрузчик в отдельную
 временную папку. Укажи фактический абсолютный путь к установленному боту и
-**точную опубликованную** версию с аттестацией Nook из GitHub Releases.
-Например, для штатной папки `~/nook` и опубликованной Alpha 1:
+канал. Загрузчик выберет новейший подходящий подписанный релиз этого
+канала. Например, для штатной папки `~/nook` и канала Alpha:
 
 ```bash
 stage="$(mktemp -d)"
 curl -fsSL https://raw.githubusercontent.com/Sppqq/nook/main/bootstrap.sh -o "$stage/bootstrap.sh" &&
-  bash "$stage/bootstrap.sh" --migrate --home "$HOME/nook" --version 0.1.2-alpha.1 --yes
+  bash "$stage/bootstrap.sh" --migrate --home "$HOME/nook" --channel alpha --yes
 ```
+
+Чтобы выбрать конкретный релиз, замени `--channel alpha` на `--version X`.
+Эта команда выбирает цель только для миграции. Для следующих обновлений
+выбери канал в Telegram.
 
 Нужны пользовательский systemd, Python 3.11+ с `venv`, GitHub CLI с
 поддержкой Sigstore и файловая система Linux с атомарным обменом каталогами.
@@ -180,9 +184,12 @@ systemctl --user start nook.service
 - **PM2, Docker and private Domovoy builds.** These need an installation-specific
   migration that accounts for the service, data and local changes.
 
-Choose an exact published version from [GitHub Releases](https://github.com/Sppqq/nook/releases)
-for SSH migration. Use the command above in an interactive SSH session
-under the service owner and substitute the actual installation directory.
+The SSH migration command above selects the newest eligible signed
+release on Alpha. Run it in an interactive SSH session under the service
+owner and substitute the actual installation directory. To choose an exact
+version from [GitHub Releases](https://github.com/Sppqq/nook/releases),
+replace `--channel alpha` with `--version X`. The migration leaves your
+update settings intact. Choose a channel in Telegram for future updates.
 
 Open **More → Mods → Updates and backups** to select a channel, review releases, pin a version and configure checks. The installer fetches the newest eligible published release for the selected channel. `bootstrap.sh --version X` installs and pins exact published version `X`. Use `--dev` for a development installation. Release installs and updates require a current GitHub CLI (`gh`) for Sigstore verification without login. Confirm updates separately from the installer.
 

@@ -3,7 +3,7 @@ import asyncio
 from datetime import datetime
 import time
 
-from codex_pool import STRATEGIES
+from codex_pool import REFRESH, STRATEGIES
 
 STATUS = {
     "excluded": ("Вне пула", "Excluded from pool"),
@@ -33,16 +33,35 @@ def setup(m):
     def window_name(minutes):
         return m.core.codex_window_name(minutes, english=tr(False, True))
 
+    def fresh_windows(account, model):
+        cached = pool.cache.get((account, model))
+        if cached and time.monotonic() - cached[0] < REFRESH:
+            now = time.time()
+            return [window for window in cached[1].windows if not window.reset or window.reset > now]
+        return []
+
     @m.button("Пул Codex", icon="chatgpt", where="mods", key="open", english="Codex pool")
     async def show(ctx):
         accounts = pool.accounts()
+        model = m.core.codex_model()
+        if accounts:
+            await ctx.toast(tr("Проверяю квоты…", "Checking quotas…"))
+            await pool.refresh(accounts, model, force=ctx.arg == "refresh")
         rows = [[m.btn(a.name, "account", a.ident, icon="spark" if a.active else "chatgpt")] for a in accounts]
-        rows.append([m.btn(tr("Настройки пула", "Pool settings"), "settings", icon="more")])
+        rows.append([m.btn(tr("Обновить", "Refresh"), "open", "refresh", icon="refresh"),
+                     m.btn(tr("Настройки пула", "Pool settings"), "settings", icon="more")])
+        rows.append([m.core.btn(tr("Лимиты", "Usage"), "limits", "back")])
         text = (tr("**Пул Codex** · включён", "**Codex pool** · enabled") if pool.enabled()
                 else tr("**Пул Codex** · выключен", "**Codex pool** · disabled"))
         if not accounts:
             text += tr("\nДобавь сохранённые аккаунты через совместимую утилиту codex-auth.",
                        "\nAdd saved accounts with a compatible codex-auth CLI.")
+        for account in accounts:
+            summary = " · ".join(
+                f"{window_name(w.minutes)} — {max(0, 100 - w.used):g}%"
+                for w in fresh_windows(account, model)
+            )
+            text += f"\n`{account.name}` · " + (summary or tr("Квота неизвестна", "Quota unavailable"))
         await (ctx.edit if ctx.cb else ctx.reply)(text, rows)
 
     async def settings(ctx):
@@ -90,15 +109,13 @@ def setup(m):
         status, _, _ = pool.status(account, model, time.time())
         cap = pool.cap(account)
         lines = [f"`{account.name}`", f"{tr(*STATUS[status])} · {tr('бюджет', 'budget')} {cap}%"]
-        cached = pool.cache.get((account, model))
-        if cached and status != "unknown":
-            for window in cached[1].windows:
-                label = window_name(window.minutes)
-                remaining = max(0, cap - window.used)
-                lines.append(f"**{label} · {remaining:g}% {tr('осталось', 'remaining')}**")
-                if window.reset:
-                    reset = datetime.fromtimestamp(window.reset).astimezone()
-                    lines.append(f"{tr('Сброс', 'Reset')} · {reset:%d.%m %H:%M %Z}")
+        for window in fresh_windows(account, model):
+            label = window_name(window.minutes)
+            remaining = max(0, 100 - window.used)
+            lines.append(f"**{label} · {remaining:g}% {tr('осталось', 'remaining')}**")
+            if window.reset:
+                reset = datetime.fromtimestamp(window.reset).astimezone()
+                lines.append(f"{tr('Сброс', 'Reset')} · {reset:%d.%m %H:%M %Z}")
         rows = [[m.btn(tr("Обновить", "Refresh"), "account", ident + ",refresh"),
                  m.btn(tr("Бюджет", "Budget"), "budget", ident)],
                 [m.btn(tr("Пул Codex", "Codex pool"), "open", icon="back")]]
@@ -170,7 +187,7 @@ def setup(m):
                 current[key] = [window.reset, window.used]
                 if previous and 0 < previous[0] <= now and previous[1] > 0 and previous[0] != window.reset:
                     label = window_name(window.minutes)
-                    if notify:
+                    if notify and (window.minutes != 300 or previous[1] >= 90):
                         notices.append((key, f"`{account.name}` · {label}"))
                     if warm and window.minutes == 10080 and window.key[0] == "codex":
                         known = warmups.get(account.ident)

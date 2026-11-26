@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.2-nightly.20261126
+
+- Switch between Codex 6.2 Sol and Astra directly from the Telegram quota screen. Navigating the menu keeps a single active message.
+- Show actual remaining quota separately from personal Codex pool budgets. Send five-hour reset alerts only after at least 90% use.
+- Select an update channel during one-time SSH migration from the original installer. The migration uses the newest eligible signed release.
+
 ## 0.1.2-nightly.20261125
 
 - Add an opt-in Codex account pool with four routing orders, per-account quota budgets, safe conversation continuation, reset notifications, and optional weekly warm-up.
