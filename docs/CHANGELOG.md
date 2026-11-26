@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.2-alpha.2
+
+- Switch Codex 6.2 Sol and Astra directly from the Telegram quota screen. Menu navigation keeps one active message.
+- Show remaining quota separately from personal account budgets. Five-hour reset alerts require at least 90% usage.
+- Add opt-in Codex account pooling, usage budgets, conversation recovery, and an English interface preference.
+- Update an original v0.1.1 install from its existing Telegram menu when dependencies match. The one-time signed SSH migration from v0.1.0 can select the newest release in a chosen channel.
+- Stage dependency changes for managed upgrades and restore the previous version and environment if startup fails.
+
 ## 0.1.2-nightly.20261126 — candidate
 
 - Switch between Codex 6.2 Sol and Astra directly from the Telegram quota screen. Navigating the menu keeps a single active message.
