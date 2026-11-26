@@ -1860,7 +1860,7 @@ async def view_jobs():
     return "\n".join(lines), kb(*rows, back())
 
 
-LIMIT_MODELS = ("gpt-6.2-sol", "gpt-6.2-astra")
+LIMIT_MODELS = ("gpt-6.2-sol", "gpt-6.2-astra", "gpt-6-luna")
 MODELS = {  # из `codex app-server` model/list
     "gpt-6-luna": ("6 Luna", ["low", "medium", "high", "xhigh", "max"], "medium"),
     "gpt-6.1-sol": ("6.1 Sol", ["low", "medium", "high", "xhigh", "max", "ultra"], "low"),

@@ -67,7 +67,7 @@ class TelegramDispatchTests(unittest.IsolatedAsyncioTestCase):
         runtime['CFG'].update(model='gpt-6.1-sol', effort='high')
         runtime['get_limits'] = AsyncMock(return_value=None)
         runtime['antigravity_limits'] = Mock(get_limits=AsyncMock(return_value=None), format_limits=Mock(return_value=''))
-        runtime['edit'] = AsyncMock(side_effect=[True, False])
+        runtime['edit'] = AsyncMock(side_effect=[True, True, False])
         runtime['post'] = AsyncMock(return_value=51)
         runtime['delete_msgs'] = AsyncMock()
 
@@ -78,10 +78,17 @@ class TelegramDispatchTests(unittest.IsolatedAsyncioTestCase):
         runtime['post'].assert_not_awaited()
         self.assertIn('6.2 Sol · high', runtime['edit'].await_args.args[2])
 
+        runtime['CFG']['effort'] = 'ultra'
+        await self.dispatch('lm:gpt-6-luna')
+        self.assertEqual((runtime['CFG']['model'], runtime['CFG']['effort']), ('gpt-6-luna', 'medium'))
+        self.assertEqual(runtime['STATE']['view_msgs'], [50])
+        runtime['post'].assert_not_awaited()
+        self.assertIn('6 Luna · medium', runtime['edit'].await_args.args[2])
+
         await self.dispatch('limits!')
         self.assertEqual(runtime['STATE']['view_msgs'], [51])
         runtime['delete_msgs'].assert_awaited_with(7, [50])
-        self.assertEqual(runtime['post'].await_args.args[2].inline_keyboard[0][0].text, '✓ 6.2 Sol')
+        self.assertEqual(runtime['post'].await_args.args[2].inline_keyboard[0][2].text, '✓ 6 Luna')
         runtime['antigravity_limits'].get_limits.assert_awaited_with(force=True)
 
     async def test_pool_five_hour_reset_requires_ninety_percent(self):
