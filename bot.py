@@ -1956,6 +1956,7 @@ NODE_KEY = os.path.join(KEYS, "id_ed25519")
 NODES_PATH = os.path.join(HOME, "nodes.json")
 SSH_CONFIG = os.path.join(HOME, "ssh_config")
 PENDING = {}  # chat_id -> {"kind": "node", "until": ts, "mid": id сообщения-подсказки}
+NODE_CONNECTIONS = set()  # Node enrollment must finish before a core restart.
 FACTS_SH = ("echo host=$(hostname); . /etc/os-release 2>/dev/null; echo os=$PRETTY_NAME; echo cpu=$(nproc); "
             "free -m | awk '/Mem/{print \"ram=\"$2\" MB\"}'; df -h / | awk 'NR==2{print \"disk=\"$2\", занято \"$5}'; "
             "echo user=$(id -un); [ $(id -u) = 0 ] && echo root=yes || (sudo -n true 2>/dev/null && echo root=sudo || echo root=no)")
@@ -2048,10 +2049,45 @@ def looks_like_creds(text):
 async def add_node(chat_id, spec, status=None):
     """Зайти по паролю, поставить ключ, проверить вход по ключу, сохранить. Пароль живёт только здесь.
     status — сообщение-подсказка «Новая нода»: дальше весь процесс показываем в нём же."""
+    task = asyncio.current_task()
+    NODE_CONNECTIONS.add(task)
+    password = spec.pop("password", None)
     rich = ui_mode() == "rich"
-    text = f"{E('node')} Подключаюсь к `{spec['user']}@{spec['host']}:{spec['port']}`…"
-    if not (status and await edit(chat_id, status, text, None, rich)):
-        status = await post(chat_id, text, silent=True)
+    try:
+        text = f"{E('node')} Подключаюсь к `{spec['user']}@{spec['host']}:{spec['port']}`…"
+        if not (status and await edit(chat_id, status, text, None, rich)):
+            status = await post(chat_id, text, silent=True)
+        await connect_node(chat_id, status, spec, password, rich)
+    except FileNotFoundError as exc:
+        command = os.path.basename(exc.filename or "SSH")
+        await edit(chat_id, status, f"{E('err')} Не удалось добавить ноду: на сервере Nook отсутствует "
+                   f"программа `{command}`. После исправления повтори через «Ноды» → «Добавить».", None, rich)
+    except asyncio.TimeoutError:
+        await edit(chat_id, status, f"{E('err')} Не дождался ответа от `{spec['host']}`. "
+                   "Проверь доступность SSH и повтори через «Ноды» → «Добавить».", None, rich)
+    except OSError:
+        log.warning("Node SSH process failed to start")
+        await edit(chat_id, status, f"{E('err')} Не удалось запустить подключение к ноде. "
+                   "Повтори через «Ноды» → «Добавить»; если ошибка повторится — напиши мне.", None, rich)
+    finally:
+        password = None
+        NODE_CONNECTIONS.discard(task)
+
+
+async def node_output(process, timeout):
+    """При тайм-ауте или отмене не оставлять SSH-процесс в фоне."""
+    try:
+        return await asyncio.wait_for(process.communicate(), timeout)
+    except (asyncio.TimeoutError, asyncio.CancelledError):
+        await stop_process_group(process)
+        raise
+
+
+async def connect_node(chat_id, status, spec, password, rich):
+    required = ["ssh", "ssh-keygen"] + (["sshpass", "ssh-copy-id"] if password else [])
+    for command in required:
+        if not shutil.which(command):
+            raise FileNotFoundError(2, "Required SSH program is missing", command)
     await ensure_node_key()
     base = ["-o", "StrictHostKeyChecking=accept-new", "-o", f"UserKnownHostsFile={os.path.join(KEYS, 'known_hosts')}",
             "-o", "ConnectTimeout=15", "-p", str(spec["port"])]
@@ -2062,15 +2098,15 @@ async def add_node(chat_id, spec, status=None):
         p = await asyncio.create_subprocess_exec("ssh-keygen", "-R", target, "-f", kh,
                                                  stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
         await p.wait()
-    password = spec.pop("password")
     if password and not await copy_key(chat_id, status, spec, password, base, rich):
         return
     del password
     # вход по ключу + факты о машине
     p = await asyncio.create_subprocess_exec(
         "ssh", "-i", NODE_KEY, "-o", "IdentitiesOnly=yes", "-o", "BatchMode=yes", *base,
-        f"{spec['user']}@{spec['host']}", FACTS_SH, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
-    out, _ = await asyncio.wait_for(p.communicate(), 30)
+        f"{spec['user']}@{spec['host']}", FACTS_SH, stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT, start_new_session=True)
+    out, _ = await node_output(p, 30)
     if p.returncode != 0:
         await edit(chat_id, status, f"{E('err')} Не пускает по ключу Nook:\n```\n"
                    f"{out.decode(errors='replace')[-500:]}\n```\nКлюч для `authorized_keys` — в «Ноды» → «Добавить».",
@@ -2083,17 +2119,14 @@ async def add_node(chat_id, spec, status=None):
 async def copy_key(chat_id, status, spec, password, base, rich):
     """Зайти по паролю и положить ключ Nook в authorized_keys. Пароль — только в env дочернего процесса."""
     env = dict(os.environ, SSHPASS=password)
-    p = await asyncio.create_subprocess_exec(
-        "sshpass", "-e", "ssh-copy-id", "-i", NODE_KEY + ".pub", "-o", "PubkeyAuthentication=no", *base,
-        f"{spec['user']}@{spec['host']}", env=env, stdin=asyncio.subprocess.DEVNULL,
-        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
     try:
-        out, _ = await asyncio.wait_for(p.communicate(), 60)
-    except asyncio.TimeoutError:
-        p.kill()
-        out = b"timeout"
-    env.pop("SSHPASS", None)
-    del env
+        p = await asyncio.create_subprocess_exec(
+            "sshpass", "-e", "ssh-copy-id", "-i", NODE_KEY + ".pub", "-o", "PubkeyAuthentication=no", *base,
+            f"{spec['user']}@{spec['host']}", env=env, stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT, start_new_session=True)
+        out, _ = await node_output(p, 60)
+    finally:
+        env.pop("SSHPASS", None)
     out = out.decode(errors="replace")
     if p.returncode != 0:
         why = ("неверный логин или пароль (или вход по паролю запрещён)" if p.returncode == 5 or "denied" in out
@@ -5080,6 +5113,11 @@ async def core_import_ok():
         await stop_process_group(p)
 
 
+def core_busy():
+    return bool(NODE_CONNECTIONS or user_lane.current or bg_lane.current
+                or user_lane.lock.locked() or bg_lane.lock.locked())
+
+
 async def mods_loop():
     from nook_update import heartbeat
     good_saved = False
@@ -5093,19 +5131,21 @@ async def mods_loop():
             if not getattr(core, 'backup_active', False) and not good_saved and time.time() - started > 60:
                 shutil.copy2(os.path.join(HOME, "bot.py"), os.path.join(modsys.SPOOL, "bot.py.good"))
                 good_saved = True
-            if os.path.exists(modsys.RESTART_FLAG) and not (user_lane.current or bg_lane.current
-                                                            or user_lane.lock.locked() or bg_lane.lock.locked()):
-                os.remove(modsys.RESTART_FLAG)
+            if os.path.exists(modsys.RESTART_FLAG) and not core_busy():
                 ok, out = await core_import_ok()
                 if ok:
-                    pass
-                    log.info("core restart requested")
-                    save_state()
-                    os._exit(0)  # pm2 поднимет заново
-                await notify(f"{E('err')} Не перезапускаюсь: bot.py с ошибкой, работаю на старой версии.\n```\n{out}\n```\n"
-                             f"Рабочая копия: `spool/mods/bot.py.good`.",
-                             markup=kb((btn("Почини ядро", "mfix:__core__", "spark", "primary"),)))
-                MOD_ERRS["__core__"] = ("bot.py", out)
+                    # Во время проверки импорта могла начаться новая задача или подключение.
+                    if not core_busy():
+                        os.remove(modsys.RESTART_FLAG)
+                        log.info("core restart requested")
+                        save_state()
+                        os._exit(0)  # systemd/pm2 поднимет заново
+                else:
+                    os.remove(modsys.RESTART_FLAG)
+                    await notify(f"{E('err')} Не перезапускаюсь: bot.py с ошибкой, работаю на старой версии.\n```\n{out}\n```\n"
+                                 f"Рабочая копия: `spool/mods/bot.py.good`.",
+                                 markup=kb((btn("Почини ядро", "mfix:__core__", "spark", "primary"),)))
+                    MOD_ERRS["__core__"] = ("bot.py", out)
         except Exception:
             log.exception("mods loop failed")
         await asyncio.sleep(2)

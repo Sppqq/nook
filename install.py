@@ -531,7 +531,7 @@ def main():
     if not args.no_system_packages:
         run(['sudo', '-v'])
         quiet(['sudo', '-n', 'apt-get', 'update'], 'Обновление списка пакетов')
-        quiet(['sudo', '-n', 'apt-get', 'install', '-y', f'python{sys.version_info.major}.{sys.version_info.minor}-venv', 'python3-pip', 'ca-certificates', 'git', 'curl', 'openssh-client', 'procps', 'iproute2', 'ffmpeg'], 'Системные зависимости')
+        quiet(['sudo', '-n', 'apt-get', 'install', '-y', f'python{sys.version_info.major}.{sys.version_info.minor}-venv', 'python3-pip', 'ca-certificates', 'git', 'curl', 'openssh-client', 'sshpass', 'procps', 'iproute2', 'ffmpeg'], 'Системные зависимости')
     os.umask(0o077)
     if target != SOURCE:
         shutil.copytree(SOURCE, target, dirs_exist_ok=True, ignore=ignore_source_data)
